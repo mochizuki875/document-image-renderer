@@ -15,7 +15,7 @@ func main() {
 
 	result, err := renderer.RenderDocument(
 		context.Background(),
-		"test/documents/samplefile.doc",
+		"test/documents/samplefile.pptx",
 		"example/output",
 		&options,
 	)

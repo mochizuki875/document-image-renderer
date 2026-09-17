@@ -17,7 +17,7 @@ XLS uses LibreOffice's single-page-sheet export filter. XLSX and XLSM worksheets
 
 ## Requirements
 
-- Go 1.24 or later
+- Go 1.27 or later
 - LibreOffice for Office input only
 - Fonts used by the source documents for stable Office layout
 
@@ -41,7 +41,7 @@ func main() {
 
 	result, err := renderer.RenderDocument(
 		context.Background(),
-		"test/documents/samplefile.doc",
+		"test/documents/samplefile.docx",
 		"example/output",
 		&options,
 	)
@@ -55,7 +55,7 @@ func main() {
 Example:
 
 ```bash
-go run example/example.go 
+go run example/example.go
 ```
 
 Pass `nil` options to use the defaults. Use `DefaultRenderOptions` before overriding individual fields.
@@ -73,6 +73,19 @@ Pass `nil` options to use the defaults. Use `DefaultRenderOptions` before overri
 | `LibreOfficeExecutable` | auto-detected | Explicit LibreOffice executable path |
 
 Output names use `<prefix>-page-0001.png` or `.jpg`. Existing files with the same names are replaced; unrelated output files remain untouched.
+
+Rendering is page-oriented rather than transactional. If a later page fails, images already written for earlier pages remain in the output directory. The returned `RenderResult.Source` is the absolute input path.
+
+## Errors and cancellation
+
+`RenderDocument` accepts a `context.Context`. Cancellation stops an active LibreOffice conversion and is observed between PDF pages. Callers can use `errors.As` with these public error types:
+
+- `UnsupportedFormatError`
+- `DependencyNotFoundError`
+- `DocumentConversionError`
+- `DocumentRenderError`
+
+`DocumentConversionError` retains LibreOffice standard output and standard error for diagnostics. Input-validation and filesystem errors may be returned directly.
 
 ## CLI
 
@@ -101,5 +114,7 @@ make build
 ```
 
 Integration tests discover every file directly under `test/documents`. They require `RUN_INTEGRATION_TESTS=1`; Office cases are skipped when LibreOffice is unavailable.
+
+The dev container supplies Go 1.27, LibreOffice Writer/Calc/Impress, and fonts used by common Office documents.
 
 See [DESIGN.md](DESIGN.md) for architecture, conversion behavior, and operational limits.

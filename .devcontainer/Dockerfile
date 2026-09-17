@@ -1,4 +1,4 @@
-FROM mcr.microsoft.com/devcontainers/go:1-1.24-bookworm
+FROM mcr.microsoft.com/devcontainers/go:1.27-bookworm
 
 ENV LANG=C.UTF-8 \
     LC_ALL=C.UTF-8 \

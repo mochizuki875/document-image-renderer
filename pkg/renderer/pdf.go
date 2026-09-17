@@ -60,54 +60,73 @@ func renderPDF(
 		if err := ctx.Err(); err != nil {
 			return nil, &DocumentRenderError{Path: pdfPath, Err: err}
 		}
-		var renderedImage image.Image
-		cleanup := func() {}
-		if options.TransparentBackground {
-			renderedImage, err = renderTransparentPage(instance, document.Document, pageIndex, options.DPI)
-		} else {
-			page, renderErr := instance.RenderPageInDPI(&requests.RenderPageInDPI{
-				DPI: options.DPI,
-				Page: requests.Page{ByIndex: &requests.PageByIndex{
-					Document: document.Document,
-					Index:    pageIndex,
-				}},
-				Document:   &document.Document,
-				RenderForm: true,
-			})
-			err = renderErr
-			if page != nil {
-				cleanup = page.Cleanup
-				renderedImage = page.Result.Image
-			}
-		}
-		if err != nil {
-			return nil, &DocumentRenderError{Path: pdfPath, Err: fmt.Errorf("render page %d: %w", pageIndex+1, err)}
-		}
-		if !options.TransparentBackground {
-			renderedImage = compositeOnWhite(renderedImage)
-		}
-
-		extension := "png"
-		if options.ImageFormat == ImageFormatJPEG {
-			extension = "jpg"
-		}
 		imagePath := filepath.Join(
 			outputDirectory,
-			fmt.Sprintf("%s-page-%0*d.%s", prefix, pageDigits, pageIndex+1, extension),
+			fmt.Sprintf("%s-page-%0*d.%s", prefix, pageDigits, pageIndex+1, imageExtension(options.ImageFormat)),
 		)
-		if err := saveImage(imagePath, renderedImage, options); err != nil {
-			cleanup()
-			return nil, &DocumentRenderError{Path: pdfPath, Err: fmt.Errorf("save page %d: %w", pageIndex+1, err)}
+		rendered, err := renderPage(instance, document.Document, pageIndex, imagePath, options)
+		if err != nil {
+			return nil, &DocumentRenderError{Path: pdfPath, Err: fmt.Errorf("page %d: %w", pageIndex+1, err)}
 		}
-		images = append(images, RenderedImage{
-			PageNumber: pageIndex + 1,
-			Path:       imagePath,
-			Width:      renderedImage.Bounds().Dx(),
-			Height:     renderedImage.Bounds().Dy(),
-		})
-		cleanup()
+		images = append(images, rendered)
 	}
 	return images, nil
+}
+
+func renderPage(
+	instance pdfium.Pdfium,
+	document references.FPDF_DOCUMENT,
+	pageIndex int,
+	imagePath string,
+	options RenderOptions,
+) (RenderedImage, error) {
+	var renderedImage image.Image
+	cleanup := func() {}
+	if options.TransparentBackground {
+		var err error
+		renderedImage, err = renderTransparentPage(instance, document, pageIndex, options.DPI)
+		if err != nil {
+			return RenderedImage{}, fmt.Errorf("render: %w", err)
+		}
+	} else {
+		page, err := instance.RenderPageInDPI(&requests.RenderPageInDPI{
+			DPI: options.DPI,
+			Page: requests.Page{ByIndex: &requests.PageByIndex{
+				Document: document,
+				Index:    pageIndex,
+			}},
+			Document:   &document,
+			RenderForm: true,
+		})
+		if page != nil {
+			cleanup = page.Cleanup
+		}
+		defer cleanup()
+		if err != nil {
+			return RenderedImage{}, fmt.Errorf("render: %w", err)
+		}
+		if page == nil || page.Result.Image == nil {
+			return RenderedImage{}, fmt.Errorf("render: PDFium returned no image")
+		}
+		renderedImage = compositeOnWhite(page.Result.Image)
+	}
+
+	if err := saveImage(imagePath, renderedImage, options); err != nil {
+		return RenderedImage{}, fmt.Errorf("save: %w", err)
+	}
+	return RenderedImage{
+		PageNumber: pageIndex + 1,
+		Path:       imagePath,
+		Width:      renderedImage.Bounds().Dx(),
+		Height:     renderedImage.Bounds().Dy(),
+	}, nil
+}
+
+func imageExtension(format ImageFormat) string {
+	if format == ImageFormatJPEG {
+		return "jpg"
+	}
+	return "png"
 }
 
 func renderTransparentPage(

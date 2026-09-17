@@ -14,13 +14,14 @@ import (
 
 // Run executes the command and returns its process exit code.
 func Run(ctx context.Context, arguments []string, stdout, stderr io.Writer) int {
+	defaults := renderer.DefaultRenderOptions()
 	flags := flag.NewFlagSet("document-image-renderer", flag.ContinueOnError)
 	flags.SetOutput(stderr)
-	dpi := flags.Int("dpi", 200, "rendering resolution")
-	imageFormat := flags.String("format", "png", "output format: png or jpeg")
-	jpegQuality := flags.Int("jpeg-quality", 90, "JPEG quality from 1 to 100")
+	dpi := flags.Int("dpi", defaults.DPI, "rendering resolution")
+	imageFormat := flags.String("format", string(defaults.ImageFormat), "output format: png or jpeg")
+	jpegQuality := flags.Int("jpeg-quality", defaults.JPEGQuality, "JPEG quality from 1 to 100")
 	prefix := flags.String("prefix", "", "output file name prefix")
-	timeout := flags.Float64("timeout", 120, "LibreOffice timeout in seconds")
+	timeout := flags.Float64("timeout", defaults.LibreOfficeTimeout.Seconds(), "LibreOffice timeout in seconds")
 	transparent := flags.Bool("transparent", false, "use a transparent PNG background")
 	libreOffice := flags.String("libreoffice", "", "path to the LibreOffice executable")
 	flags.Usage = func() {
