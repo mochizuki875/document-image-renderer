@@ -27,10 +27,6 @@ func RenderDocument(
 	outputDirectory string,
 	options *RenderOptions,
 ) (*RenderResult, error) {
-	if ctx == nil {
-		return nil, fmt.Errorf("context must not be nil")
-	}
-
 	renderOptions := DefaultRenderOptions()
 	if options != nil {
 		renderOptions = *options
@@ -39,21 +35,9 @@ func RenderDocument(
 		return nil, err
 	}
 
-	sourcePath, err := filepath.Abs(source)
+	sourcePath, extension, err := validateDocument(ctx, source)
 	if err != nil {
-		return nil, fmt.Errorf("resolve input document: %w", err)
-	}
-	info, err := os.Stat(sourcePath)
-	if err != nil {
-		return nil, fmt.Errorf("input document does not exist %q: %w", sourcePath, err)
-	}
-	if !info.Mode().IsRegular() {
-		return nil, fmt.Errorf("input document is not a regular file: %s", sourcePath)
-	}
-
-	extension := strings.ToLower(filepath.Ext(sourcePath))
-	if _, supported := supportedExtensions[extension]; !supported {
-		return nil, &UnsupportedFormatError{Extension: extension, Path: sourcePath}
+		return nil, err
 	}
 	outputPath, err := filepath.Abs(outputDirectory)
 	if err != nil {
@@ -83,6 +67,28 @@ func RenderDocument(
 		return nil, err
 	}
 	return &RenderResult{Source: sourcePath, Images: images}, nil
+}
+
+func validateDocument(ctx context.Context, source string) (string, string, error) {
+	if ctx == nil {
+		return "", "", fmt.Errorf("context must not be nil")
+	}
+	sourcePath, err := filepath.Abs(source)
+	if err != nil {
+		return "", "", fmt.Errorf("resolve input document: %w", err)
+	}
+	info, err := os.Stat(sourcePath)
+	if err != nil {
+		return "", "", fmt.Errorf("input document does not exist %q: %w", sourcePath, err)
+	}
+	if !info.Mode().IsRegular() {
+		return "", "", fmt.Errorf("input document is not a regular file: %s", sourcePath)
+	}
+	extension := strings.ToLower(filepath.Ext(sourcePath))
+	if _, supported := supportedExtensions[extension]; !supported {
+		return "", "", &UnsupportedFormatError{Extension: extension, Path: sourcePath}
+	}
+	return sourcePath, extension, nil
 }
 
 // SupportedExtensions returns the accepted input extensions in lexical order.

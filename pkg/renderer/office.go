@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 const calcSinglePageFilter = `pdf:calc_pdf_Export:{"SinglePageSheets":{"type":"boolean","value":"true"}}`
@@ -34,13 +35,60 @@ var executeLibreOffice = func(ctx context.Context, executable string, arguments 
 	return stdout.String(), stderr.String(), err
 }
 
+type libreOfficeConfig struct {
+	timeout    time.Duration
+	executable string
+}
+
 func convertOfficeToPDF(
 	ctx context.Context,
 	source string,
 	extension string,
 	options RenderOptions,
 ) (string, func(), error) {
-	executable := options.LibreOfficeExecutable
+	conversionFilter := "pdf"
+	if extension == ".xls" {
+		conversionFilter = calcSinglePageFilter
+	}
+	return convertOffice(ctx, source, extension, officeConversion{
+		targetExtension: ".pdf", filter: conversionFilter, prepareSource: true,
+	}, libreOfficeConfig{timeout: options.LibreOfficeTimeout, executable: options.LibreOfficeExecutable})
+}
+
+func convertLegacyOfficeToOOXML(
+	ctx context.Context,
+	source string,
+	extension string,
+	config libreOfficeConfig,
+) (string, func(), error) {
+	targets := map[string]string{
+		".doc": ".docx",
+		".ppt": ".pptx",
+		".xls": ".xlsx",
+	}
+	targetExtension, supported := targets[extension]
+	if !supported {
+		return "", func() {}, fmt.Errorf("unsupported legacy Office format: %s", extension)
+	}
+	return convertOffice(ctx, source, extension, officeConversion{
+		targetExtension: targetExtension, filter: strings.TrimPrefix(targetExtension, "."),
+	}, config)
+}
+
+type officeConversion struct {
+	targetExtension string
+	filter          string
+	prepareSource   bool
+}
+
+func convertOffice(
+	ctx context.Context,
+	source string,
+	extension string,
+	conversion officeConversion,
+	config libreOfficeConfig,
+) (string, func(), error) {
+	executable := config.executable
 	if executable == "" {
 		for _, candidate := range []string{"libreoffice", "soffice"} {
 			found, err := findExecutable(candidate)
@@ -78,10 +126,9 @@ func convertOfficeToPDF(
 		return fail(err, "", "")
 	}
 
-	conversionSource := prepareOfficeSource(source, extension, workingDirectory)
-	conversionFilter := "pdf"
-	if extension == ".xls" {
-		conversionFilter = calcSinglePageFilter
+	conversionSource := source
+	if conversion.prepareSource {
+		conversionSource = prepareOfficeSource(source, extension, workingDirectory)
 	}
 	profileURL := (&url.URL{Scheme: "file", Path: filepath.ToSlash(profileDirectory)}).String()
 	arguments := []string{
@@ -92,13 +139,13 @@ func convertOfficeToPDF(
 		"--nofirststartwizard",
 		"-env:UserInstallation=" + profileURL,
 		"--convert-to",
-		conversionFilter,
+		conversion.filter,
 		"--outdir",
 		outputDirectory,
 		conversionSource,
 	}
 
-	timeoutContext, cancel := context.WithTimeout(ctx, options.LibreOfficeTimeout)
+	timeoutContext, cancel := context.WithTimeout(ctx, config.timeout)
 	defer cancel()
 	stdout, stderr, commandErr := executeLibreOffice(timeoutContext, executable, arguments)
 	if timeoutErr := timeoutContext.Err(); errors.Is(timeoutErr, context.DeadlineExceeded) {
@@ -108,12 +155,12 @@ func convertOfficeToPDF(
 		return fail(commandErr, stdout, stderr)
 	}
 
-	pdfName := strings.TrimSuffix(filepath.Base(source), filepath.Ext(source)) + ".pdf"
-	pdfPath := filepath.Join(outputDirectory, pdfName)
-	if info, err := os.Stat(pdfPath); err != nil || !info.Mode().IsRegular() {
-		return fail(fmt.Errorf("LibreOffice did not produce %s", pdfName), stdout, stderr)
+	outputName := strings.TrimSuffix(filepath.Base(source), filepath.Ext(source)) + conversion.targetExtension
+	outputPath := filepath.Join(outputDirectory, outputName)
+	if info, err := os.Stat(outputPath); err != nil || !info.Mode().IsRegular() {
+		return fail(fmt.Errorf("LibreOffice did not produce %s", outputName), stdout, stderr)
 	}
-	return pdfPath, cleanup, nil
+	return outputPath, cleanup, nil
 }
 
 func configureLibreOfficeProfile(profileDirectory string) error {

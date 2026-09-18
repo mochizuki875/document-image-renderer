@@ -7,6 +7,9 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/mochizuki875/document-image-renderer/pkg/renderer"
@@ -48,13 +51,36 @@ func Run(ctx context.Context, arguments []string, stdout, stderr io.Writer) int 
 		LibreOfficeTimeout:    time.Duration(*timeout * float64(time.Second)),
 		LibreOfficeExecutable: *libreOffice,
 	}
-	result, err := renderer.RenderDocument(ctx, flags.Arg(0), flags.Arg(1), &options)
+	outputDirectory, err := filepath.Abs(flags.Arg(1))
+	if err != nil {
+		fmt.Fprintf(stderr, "error: resolve output directory: %v\n", err)
+		return 1
+	}
+	result, err := renderer.RenderDocument(ctx, flags.Arg(0), outputDirectory, &options)
 	if err != nil {
 		fmt.Fprintf(stderr, "error: %v\n", err)
+		return 1
+	}
+	extracted, err := renderer.ExtractDocumentWithOptions(ctx, flags.Arg(0), &renderer.ExtractOptions{
+		LibreOfficeTimeout:    options.LibreOfficeTimeout,
+		LibreOfficeExecutable: options.LibreOfficeExecutable,
+	})
+	if err != nil {
+		fmt.Fprintf(stderr, "error: %v\n", err)
+		return 1
+	}
+	textPrefix := options.FilenamePrefix
+	if textPrefix == "" {
+		textPrefix = strings.TrimSuffix(filepath.Base(result.Source), filepath.Ext(result.Source))
+	}
+	textPath := filepath.Join(outputDirectory, textPrefix+".txt")
+	if err := os.WriteFile(textPath, []byte(extracted.Text()), 0o644); err != nil {
+		fmt.Fprintf(stderr, "error: write extracted text: %v\n", err)
 		return 1
 	}
 	for _, image := range result.Images {
 		fmt.Fprintln(stdout, image.Path)
 	}
+	fmt.Fprintln(stdout, textPath)
 	return 0
 }

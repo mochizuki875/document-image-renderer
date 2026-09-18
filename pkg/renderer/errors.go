@@ -26,7 +26,7 @@ func (err *DependencyNotFoundError) Error() string {
 	return fmt.Sprintf("%s is required to %s", err.Dependency, err.Operation)
 }
 
-// DocumentConversionError reports an Office-to-PDF conversion failure.
+// DocumentConversionError reports an Office document conversion failure.
 type DocumentConversionError struct {
 	Path   string
 	Stdout string
@@ -35,7 +35,7 @@ type DocumentConversionError struct {
 }
 
 func (err *DocumentConversionError) Error() string {
-	return fmt.Sprintf("could not convert document to PDF %q: %v", err.Path, err.Err)
+	return fmt.Sprintf("could not convert Office document %q: %v", err.Path, err.Err)
 }
 
 func (err *DocumentConversionError) Unwrap() error { return err.Err }
@@ -51,3 +51,15 @@ func (err *DocumentRenderError) Error() string {
 }
 
 func (err *DocumentRenderError) Unwrap() error { return err.Err }
+
+// DocumentExtractionError reports a document text extraction failure.
+type DocumentExtractionError struct {
+	Path string
+	Err  error
+}
+
+func (err *DocumentExtractionError) Error() string {
+	return fmt.Sprintf("could not extract document text %q: %v", err.Path, err.Err)
+}
+
+func (err *DocumentExtractionError) Unwrap() error { return err.Err }

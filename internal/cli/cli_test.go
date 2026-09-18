@@ -24,13 +24,25 @@ func TestRunRendersPDF(t *testing.T) {
 	if exitCode != 0 {
 		t.Fatalf("unexpected exit code %d: %s", exitCode, stderr.String())
 	}
-	for _, path := range strings.Fields(stdout.String()) {
+	paths := strings.Fields(stdout.String())
+	for _, path := range paths {
 		if filepath.Base(path)[:7] != "preview" {
 			t.Fatalf("unexpected output path: %s", path)
 		}
 		if _, err := os.Stat(path); err != nil {
 			t.Fatalf("rendered image does not exist: %v", err)
 		}
+	}
+	textPath := filepath.Join(outputDirectory, "preview.txt")
+	content, err := os.ReadFile(textPath)
+	if err != nil {
+		t.Fatalf("extracted text does not exist: %v", err)
+	}
+	if len(content) == 0 {
+		t.Fatal("extracted text is empty")
+	}
+	if paths[len(paths)-1] != textPath {
+		t.Fatalf("last output path = %q, want %q", paths[len(paths)-1], textPath)
 	}
 }
 

@@ -9,7 +9,9 @@ import (
 	_ "image/png"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 )
 
 func TestRenderDocumentRendersEveryPDFPage(t *testing.T) {
@@ -100,6 +102,84 @@ func TestRenderDocumentRejectsUnsupportedExtension(t *testing.T) {
 	var unsupported *UnsupportedFormatError
 	if !errors.As(err, &unsupported) {
 		t.Fatalf("expected UnsupportedFormatError, got %v", err)
+	}
+}
+
+func TestExtractDocumentExtractsEveryPDFPage(t *testing.T) {
+	result, err := ExtractDocument(context.Background(), fixturePath("samplefile.pdf"))
+	if err != nil {
+		t.Fatalf("extract PDF text: %v", err)
+	}
+	if result.PartCount() == 0 {
+		t.Fatal("expected at least one extracted page")
+	}
+	for index, part := range result.Parts {
+		if part.PartNumber != index+1 {
+			t.Fatalf("unexpected part number: %d", part.PartNumber)
+		}
+	}
+}
+
+func TestExtractDocumentExtractsModernOfficeText(t *testing.T) {
+	for _, name := range []string{"samplefile.docx", "samplefile.pptx", "samplefile.xlsx", "samplefile.xlsm"} {
+		t.Run(name, func(t *testing.T) {
+			result, err := ExtractDocument(context.Background(), fixturePath(name))
+			if err != nil {
+				t.Fatalf("extract Office text: %v", err)
+			}
+			if result.PartCount() == 0 {
+				t.Fatal("expected at least one extracted part")
+			}
+			for index, part := range result.Parts {
+				if part.PartNumber != index+1 {
+					t.Fatalf("unexpected part number: %d", part.PartNumber)
+				}
+				if strings.TrimSpace(part.Text) == "" {
+					t.Fatalf("part %d contains no text", part.PartNumber)
+				}
+			}
+		})
+	}
+}
+
+func TestExtractDocumentExtractsLegacyOfficeText(t *testing.T) {
+	replaceLibreOfficeFunctions(t)
+	findExecutable = func(string) (string, error) {
+		t.Fatal("explicit LibreOffice executable was not used")
+		return "", nil
+	}
+	executeLibreOffice = func(_ context.Context, executable string, arguments []string) (string, string, error) {
+		if executable != "/custom/libreoffice" {
+			t.Fatalf("unexpected executable: %s", executable)
+		}
+		source := arguments[len(arguments)-1]
+		targets := map[string]string{".doc": ".docx", ".ppt": ".pptx", ".xls": ".xlsx"}
+		targetExtension := targets[filepath.Ext(source)]
+		if filter := argumentAfter(t, arguments, "--convert-to"); filter != strings.TrimPrefix(targetExtension, ".") {
+			t.Fatalf("unexpected conversion filter: %s", filter)
+		}
+		outputDirectory := argumentAfter(t, arguments, "--outdir")
+		outputName := strings.TrimSuffix(filepath.Base(source), filepath.Ext(source)) + targetExtension
+		copyFixture(t, fixturePath("samplefile"+targetExtension), filepath.Join(outputDirectory, outputName))
+		return "", "", nil
+	}
+	for _, name := range []string{"samplefile.doc", "samplefile.ppt", "samplefile.xls"} {
+		t.Run(name, func(t *testing.T) {
+			result, err := ExtractDocumentWithOptions(context.Background(), fixturePath(name), &ExtractOptions{
+				LibreOfficeTimeout: 5 * time.Second, LibreOfficeExecutable: "/custom/libreoffice",
+			})
+			if err != nil {
+				t.Fatalf("extract legacy Office text: %v", err)
+			}
+			if result.PartCount() == 0 {
+				t.Fatal("expected at least one extracted part")
+			}
+			for _, part := range result.Parts {
+				if strings.TrimSpace(part.Text) == "" {
+					t.Fatalf("part %d contains no text", part.PartNumber)
+				}
+			}
+		})
 	}
 }
 

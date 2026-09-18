@@ -3,6 +3,7 @@ package renderer
 import (
 	"fmt"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -23,6 +24,25 @@ type RenderOptions struct {
 	FilenamePrefix        string
 	LibreOfficeTimeout    time.Duration
 	LibreOfficeExecutable string
+}
+
+// ExtractOptions controls dependencies used during text extraction.
+type ExtractOptions struct {
+	LibreOfficeTimeout    time.Duration
+	LibreOfficeExecutable string
+}
+
+// DefaultExtractOptions returns the default extraction configuration.
+func DefaultExtractOptions() ExtractOptions {
+	return ExtractOptions{LibreOfficeTimeout: 120 * time.Second}
+}
+
+// Validate checks whether all extraction option values are valid.
+func (options ExtractOptions) Validate() error {
+	if options.LibreOfficeTimeout <= 0 {
+		return fmt.Errorf("libreoffice timeout must be greater than zero")
+	}
+	return nil
 }
 
 // DefaultRenderOptions returns the default rendering configuration.
@@ -75,4 +95,30 @@ type RenderResult struct {
 // PageCount returns the number of rendered pages.
 func (result RenderResult) PageCount() int {
 	return len(result.Images)
+}
+
+// TextPart contains text extracted from one document unit.
+type TextPart struct {
+	PartNumber int
+	Text       string
+}
+
+// ExtractResult contains text extracted from a document in source order.
+type ExtractResult struct {
+	Source string
+	Parts  []TextPart
+}
+
+// PartCount returns the number of extracted document units.
+func (result ExtractResult) PartCount() int {
+	return len(result.Parts)
+}
+
+// Text joins extracted parts with a blank line.
+func (result ExtractResult) Text() string {
+	texts := make([]string, 0, len(result.Parts))
+	for _, part := range result.Parts {
+		texts = append(texts, part.Text)
+	}
+	return strings.Join(texts, "\n\n")
 }

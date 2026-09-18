@@ -1,2 +1,2 @@
-// Package renderer converts PDF and Microsoft Office documents into page images.
+// Package renderer renders and extracts text from PDF and Microsoft Office documents.
 package renderer

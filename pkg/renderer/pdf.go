@@ -25,52 +25,84 @@ func renderPDF(
 	prefix string,
 	options RenderOptions,
 ) ([]RenderedImage, error) {
-	data, err := os.ReadFile(pdfPath)
+	images, err := withPDFDocument(ctx, pdfPath, func(instance pdfium.Pdfium, document references.FPDF_DOCUMENT, pageCount int) ([]RenderedImage, error) {
+		pageDigits := max(4, len(fmt.Sprintf("%d", pageCount)))
+		images := make([]RenderedImage, 0, pageCount)
+		for pageIndex := 0; pageIndex < pageCount; pageIndex++ {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+			imagePath := filepath.Join(
+				outputDirectory,
+				fmt.Sprintf("%s-page-%0*d.%s", prefix, pageDigits, pageIndex+1, imageExtension(options.ImageFormat)),
+			)
+			rendered, err := renderPage(instance, document, pageIndex, imagePath, options)
+			if err != nil {
+				return nil, fmt.Errorf("page %d: %w", pageIndex+1, err)
+			}
+			images = append(images, rendered)
+		}
+		return images, nil
+	})
 	if err != nil {
 		return nil, &DocumentRenderError{Path: pdfPath, Err: err}
 	}
-	pool, err := webassembly.Init(webassembly.Config{
-		MinIdle:  1,
-		MaxIdle:  1,
-		MaxTotal: 1,
+	return images, nil
+}
+
+func extractPDFText(ctx context.Context, source string) ([]TextPart, error) {
+	parts, err := withPDFDocument(ctx, source, func(instance pdfium.Pdfium, document references.FPDF_DOCUMENT, pageCount int) ([]TextPart, error) {
+		parts := make([]TextPart, 0, pageCount)
+		for pageIndex := 0; pageIndex < pageCount; pageIndex++ {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+			pageText, err := instance.GetPageText(&requests.GetPageText{Page: requests.Page{ByIndex: &requests.PageByIndex{
+				Document: document, Index: pageIndex,
+			}}})
+			if err != nil {
+				return nil, fmt.Errorf("page %d: %w", pageIndex+1, err)
+			}
+			parts = append(parts, TextPart{PartNumber: pageIndex + 1, Text: pageText.Text})
+		}
+		return parts, nil
 	})
 	if err != nil {
-		return nil, &DocumentRenderError{Path: pdfPath, Err: fmt.Errorf("initialize PDFium: %w", err)}
+		return nil, &DocumentExtractionError{Path: source, Err: err}
+	}
+	return parts, nil
+}
+
+func withPDFDocument[T any](
+	ctx context.Context,
+	path string,
+	use func(pdfium.Pdfium, references.FPDF_DOCUMENT, int) (T, error),
+) (T, error) {
+	var zero T
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return zero, err
+	}
+	pool, err := webassembly.Init(webassembly.Config{MinIdle: 1, MaxIdle: 1, MaxTotal: 1})
+	if err != nil {
+		return zero, fmt.Errorf("initialize PDFium: %w", err)
 	}
 	defer pool.Close()
 	instance, err := pool.GetInstanceWithContext(ctx)
 	if err != nil {
-		return nil, &DocumentRenderError{Path: pdfPath, Err: fmt.Errorf("acquire PDFium instance: %w", err)}
+		return zero, fmt.Errorf("acquire PDFium instance: %w", err)
 	}
 	defer instance.Close()
 	document, err := instance.OpenDocument(&requests.OpenDocument{File: &data})
 	if err != nil {
-		return nil, &DocumentRenderError{Path: pdfPath, Err: fmt.Errorf("open document: %w", err)}
+		return zero, fmt.Errorf("open document: %w", err)
 	}
 	defer instance.FPDF_CloseDocument(&requests.FPDF_CloseDocument{Document: document.Document})
-	pageCountResponse, err := instance.FPDF_GetPageCount(&requests.FPDF_GetPageCount{Document: document.Document})
+	pageCount, err := instance.FPDF_GetPageCount(&requests.FPDF_GetPageCount{Document: document.Document})
 	if err != nil {
-		return nil, &DocumentRenderError{Path: pdfPath, Err: fmt.Errorf("get page count: %w", err)}
+		return zero, fmt.Errorf("get page count: %w", err)
 	}
-
-	pageCount := pageCountResponse.PageCount
-	pageDigits := max(4, len(fmt.Sprintf("%d", pageCount)))
-	images := make([]RenderedImage, 0, pageCount)
-	for pageIndex := 0; pageIndex < pageCount; pageIndex++ {
-		if err := ctx.Err(); err != nil {
-			return nil, &DocumentRenderError{Path: pdfPath, Err: err}
-		}
-		imagePath := filepath.Join(
-			outputDirectory,
-			fmt.Sprintf("%s-page-%0*d.%s", prefix, pageDigits, pageIndex+1, imageExtension(options.ImageFormat)),
-		)
-		rendered, err := renderPage(instance, document.Document, pageIndex, imagePath, options)
-		if err != nil {
-			return nil, &DocumentRenderError{Path: pdfPath, Err: fmt.Errorf("page %d: %w", pageIndex+1, err)}
-		}
-		images = append(images, rendered)
-	}
-	return images, nil
+	return use(instance, document.Document, pageCount.PageCount)
 }
 
 func renderPage(

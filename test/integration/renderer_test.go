@@ -46,6 +46,13 @@ func TestRenderFixtureDocuments(t *testing.T) {
 			for _, rendered := range result.Images {
 				assertImage(t, rendered)
 			}
+			extracted, err := renderer.ExtractDocument(context.Background(), source)
+			if err != nil {
+				t.Fatalf("extract document: %v", err)
+			}
+			if extracted.PartCount() == 0 {
+				t.Fatal("expected at least one extracted text part")
+			}
 			after, err := fileHash(source)
 			if err != nil {
 				t.Fatal(err)

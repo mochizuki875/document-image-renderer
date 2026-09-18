@@ -12,6 +12,16 @@ func TestDefaultRenderOptionsAreValid(t *testing.T) {
 	}
 }
 
+func TestDefaultExtractOptionsAreValid(t *testing.T) {
+	options := DefaultExtractOptions()
+	if err := options.Validate(); err != nil {
+		t.Fatalf("default options must be valid: %v", err)
+	}
+	if options.LibreOfficeTimeout <= 0 {
+		t.Fatalf("unexpected defaults: %+v", options)
+	}
+}
+
 func TestRenderOptionsRejectInvalidValues(t *testing.T) {
 	tests := map[string]func(*RenderOptions){
 		"dpi":          func(options *RenderOptions) { options.DPI = 0 },
@@ -32,5 +42,12 @@ func TestRenderOptionsRejectInvalidValues(t *testing.T) {
 				t.Fatal("expected validation error")
 			}
 		})
+	}
+}
+
+func TestExtractResultTextJoinsParts(t *testing.T) {
+	result := ExtractResult{Parts: []TextPart{{Text: "first"}, {Text: "second"}}}
+	if text := result.Text(); text != "first\n\nsecond" {
+		t.Fatalf("Text() = %q", text)
 	}
 }
