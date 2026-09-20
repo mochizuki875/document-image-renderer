@@ -13,7 +13,7 @@ import (
 
 func main() {
 	ctx := context.Background()
-	source := "test/documents/samplefile.docx"
+	source := "test/documents/samplefile.xlsx"
 	outputDirectory := "example/output"
 	options := renderer.DefaultRenderOptions()
 	options.DPI = 200
@@ -34,10 +34,15 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	prefix := strings.TrimSuffix(filepath.Base(source), filepath.Ext(source))
-	textPath := filepath.Join(outputDirectory, prefix+".txt")
-	if err := os.WriteFile(textPath, []byte(extracted.Text()), 0o644); err != nil {
-		log.Fatal(err)
+	for _, image := range result.Images {
+		text := ""
+		if part, found := extracted.Part(image.PageNumber); found {
+			text = part.Text
+		}
+		textPath := strings.TrimSuffix(image.Path, filepath.Ext(image.Path)) + ".txt"
+		if err := os.WriteFile(textPath, []byte(text), 0o644); err != nil {
+			log.Fatal(err)
+		}
+		fmt.Println(textPath)
 	}
-	fmt.Println(textPath)
 }

@@ -47,25 +47,13 @@ func TestConvertOfficeUsesIsolatedProfile(t *testing.T) {
 	}
 }
 
-func TestConvertXLSUsesSinglePageFilter(t *testing.T) {
-	source := filepath.Join(t.TempDir(), "input.xls")
-	if err := os.WriteFile(source, []byte("placeholder"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	replaceLibreOfficeFunctions(t)
-	findExecutable = func(string) (string, error) { return "libreoffice", nil }
-	executeLibreOffice = func(_ context.Context, _ string, arguments []string) (string, string, error) {
-		filter := argumentAfter(t, arguments, "--convert-to")
-		if filter != calcSinglePageFilter {
-			t.Fatalf("unexpected conversion filter: %s", filter)
-		}
-		outputDirectory := argumentAfter(t, arguments, "--outdir")
-		copyFixture(t, fixturePath("samplefile.pdf"), filepath.Join(outputDirectory, "input.pdf"))
-		return "", "", nil
-	}
-
-	if _, err := RenderDocument(context.Background(), source, t.TempDir(), nil); err != nil {
-		t.Fatalf("render XLS: %v", err)
+func TestExcelFormatsUseSinglePageFilter(t *testing.T) {
+	for _, extension := range []string{".xls", ".xlsx", ".xlsm"} {
+		t.Run(extension, func(t *testing.T) {
+			if filter := pdfConversionFilter(extension); filter != calcSinglePageFilter {
+				t.Fatalf("filter = %q, want SinglePageSheets filter", filter)
+			}
+		})
 	}
 }
 

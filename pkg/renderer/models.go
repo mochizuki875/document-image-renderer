@@ -114,6 +114,16 @@ func (result ExtractResult) PartCount() int {
 	return len(result.Parts)
 }
 
+// Part returns the extracted text part with the requested one-based number.
+func (result ExtractResult) Part(number int) (TextPart, bool) {
+	for _, part := range result.Parts {
+		if part.PartNumber == number {
+			return part, true
+		}
+	}
+	return TextPart{}, false
+}
+
 // Text joins extracted parts with a blank line.
 func (result ExtractResult) Text() string {
 	texts := make([]string, 0, len(result.Parts))

@@ -69,18 +69,22 @@ func Run(ctx context.Context, arguments []string, stdout, stderr io.Writer) int 
 		fmt.Fprintf(stderr, "error: %v\n", err)
 		return 1
 	}
-	textPrefix := options.FilenamePrefix
-	if textPrefix == "" {
-		textPrefix = strings.TrimSuffix(filepath.Base(result.Source), filepath.Ext(result.Source))
-	}
-	textPath := filepath.Join(outputDirectory, textPrefix+".txt")
-	if err := os.WriteFile(textPath, []byte(extracted.Text()), 0o644); err != nil {
-		fmt.Fprintf(stderr, "error: write extracted text: %v\n", err)
-		return 1
-	}
+	textPaths := make([]string, 0, len(result.Images))
 	for _, image := range result.Images {
-		fmt.Fprintln(stdout, image.Path)
+		text := ""
+		if part, found := extracted.Part(image.PageNumber); found {
+			text = part.Text
+		}
+		textPath := strings.TrimSuffix(image.Path, filepath.Ext(image.Path)) + ".txt"
+		if err := os.WriteFile(textPath, []byte(text), 0o644); err != nil {
+			fmt.Fprintf(stderr, "error: write extracted text: %v\n", err)
+			return 1
+		}
+		textPaths = append(textPaths, textPath)
 	}
-	fmt.Fprintln(stdout, textPath)
+	for index, image := range result.Images {
+		fmt.Fprintln(stdout, image.Path)
+		fmt.Fprintln(stdout, textPaths[index])
+	}
 	return 0
 }

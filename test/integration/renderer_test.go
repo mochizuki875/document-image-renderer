@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/mochizuki875/document-image-renderer/pkg/renderer"
+	"github.com/xuri/excelize/v2"
 )
 
 func TestRenderFixtureDocuments(t *testing.T) {
@@ -53,6 +54,12 @@ func TestRenderFixtureDocuments(t *testing.T) {
 			if extracted.PartCount() == 0 {
 				t.Fatal("expected at least one extracted text part")
 			}
+			switch filepath.Ext(source) {
+			case ".xls", ".xlsx", ".xlsm":
+				if result.PageCount() != extracted.PartCount() {
+					t.Fatalf("rendered images = %d, worksheets = %d", result.PageCount(), extracted.PartCount())
+				}
+			}
 			after, err := fileHash(source)
 			if err != nil {
 				t.Fatal(err)
@@ -61,6 +68,44 @@ func TestRenderFixtureDocuments(t *testing.T) {
 				t.Fatal("source document was modified")
 			}
 		})
+	}
+}
+
+func TestRenderWorkbookCreatesOneImagePerSheet(t *testing.T) {
+	if os.Getenv("RUN_INTEGRATION_TESTS") != "1" {
+		t.Skip("set RUN_INTEGRATION_TESTS=1 to run document conversions")
+	}
+	if !libreOfficeAvailable() {
+		t.Skip("LibreOffice is not installed")
+	}
+
+	workbook := excelize.NewFile()
+	defer workbook.Close()
+	if err := workbook.SetSheetName("Sheet1", "First"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := workbook.NewSheet("Second"); err != nil {
+		t.Fatal(err)
+	}
+	for _, sheet := range workbook.GetSheetList() {
+		if err := workbook.SetCellValue(sheet, "A1", sheet); err != nil {
+			t.Fatal(err)
+		}
+		if err := workbook.SetCellValue(sheet, "AZ200", "forces a multi-page print range"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	source := filepath.Join(t.TempDir(), "wide.xlsx")
+	if err := workbook.SaveAs(source); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := renderer.RenderDocument(context.Background(), source, t.TempDir(), nil)
+	if err != nil {
+		t.Fatalf("render workbook: %v", err)
+	}
+	if result.PageCount() != 2 {
+		t.Fatalf("rendered images = %d, want one for each of 2 sheets", result.PageCount())
 	}
 }
 

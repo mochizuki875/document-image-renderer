@@ -25,24 +25,28 @@ func TestRunRendersPDF(t *testing.T) {
 		t.Fatalf("unexpected exit code %d: %s", exitCode, stderr.String())
 	}
 	paths := strings.Fields(stdout.String())
-	for _, path := range paths {
-		if filepath.Base(path)[:7] != "preview" {
-			t.Fatalf("unexpected output path: %s", path)
+	if len(paths) == 0 || len(paths)%2 != 0 {
+		t.Fatalf("output paths are not image/text pairs: %v", paths)
+	}
+	for index := 0; index < len(paths); index += 2 {
+		imagePath := paths[index]
+		textPath := paths[index+1]
+		if !strings.HasPrefix(filepath.Base(imagePath), "preview-page-") {
+			t.Fatalf("unexpected image path: %s", imagePath)
 		}
-		if _, err := os.Stat(path); err != nil {
+		if _, err := os.Stat(imagePath); err != nil {
 			t.Fatalf("rendered image does not exist: %v", err)
 		}
-	}
-	textPath := filepath.Join(outputDirectory, "preview.txt")
-	content, err := os.ReadFile(textPath)
-	if err != nil {
-		t.Fatalf("extracted text does not exist: %v", err)
-	}
-	if len(content) == 0 {
-		t.Fatal("extracted text is empty")
-	}
-	if paths[len(paths)-1] != textPath {
-		t.Fatalf("last output path = %q, want %q", paths[len(paths)-1], textPath)
+		if strings.TrimSuffix(imagePath, filepath.Ext(imagePath))+".txt" != textPath {
+			t.Fatalf("text path %q does not match image path %q", textPath, imagePath)
+		}
+		content, err := os.ReadFile(textPath)
+		if err != nil {
+			t.Fatalf("extracted text does not exist: %v", err)
+		}
+		if len(content) == 0 {
+			t.Fatalf("extracted text is empty: %s", textPath)
+		}
 	}
 }
 

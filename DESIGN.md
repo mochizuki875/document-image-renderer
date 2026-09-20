@@ -15,7 +15,7 @@ The public API lives in `pkg/renderer`. CLI-specific argument parsing and output
 | PowerPoint | `.ppt`, `.pptx` | Slide | Slide |
 | Excel | `.xls`, `.xlsx`, `.xlsm` | Printed worksheet page | Worksheet |
 
-The output formats are lossless PNG and quality-configurable JPEG. XLS uses LibreOffice's `SinglePageSheets` PDF export option. XLSX and XLSM apply settings to a temporary copy so that each worksheet fits on one landscape page.
+The output formats are lossless PNG and quality-configurable JPEG. XLS, XLSX, and XLSM use LibreOffice's `SinglePageSheets` PDF export option so that each worksheet produces one PDF page and therefore one image. XLSX and XLSM also apply matching page settings to a temporary copy.
 
 The actual output unit and order follow the pages fixed in the intermediate PDF. Print settings that this library does not explicitly modify, including hidden worksheets, print areas, and margins, follow LibreOffice's PDF export behavior.
 
@@ -49,7 +49,8 @@ flowchart TD
   direct --> libreoffice[Convert to PDF with LibreOffice]
   pptx --> libreoffice
   xls --> libreoffice
-  sheets --> libreoffice
+  sheets --> excelFilter[Select SinglePageSheets filter]
+  excelFilter --> libreoffice
   libreoffice --> rasterize
   rasterize --> background{Preserve background?}
   background -->|Transparent PNG| alpha[RGBA with alpha]
@@ -130,7 +131,7 @@ JPEG has no alpha channel, so combining JPEG with `TransparentBackground=true` i
 
 Each `RenderedImage` contains a one-based page number, the absolute output image path, and the width and height of the encoded image.
 
-`ExtractResult.Source` contains the absolute input path. `ExtractResult.Parts` contains one-based `TextPart` values in source order. `PartCount` returns `len(Parts)`, and `Text` joins parts with one blank line.
+`ExtractResult.Source` contains the absolute input path. `ExtractResult.Parts` contains one-based `TextPart` values in source order. `PartCount` returns `len(Parts)`, `Part` looks up a one-based part number, and `Text` joins parts with one blank line.
 
 ## Input Validation and Routing
 
@@ -179,7 +180,7 @@ The invocation derives a context with the `LibreOfficeTimeout` deadline from the
 | PPT | None | Avoid additional presentation layout changes |
 | PPTX | Normalize negative width and height values for line shapes | Reduce line reversal caused by differences in how PowerPoint and LibreOffice interpret negative extents |
 | XLS | Set `SinglePageSheets=true` in the Calc PDF export filter | Fit each sheet to one page without rewriting the binary format |
-| XLSX, XLSM | Set `fitToPage=1`, `fitToWidth=1`, `fitToHeight=1`, and landscape orientation on every worksheet, and remove `scale` | Fix both worksheet dimensions to one landscape page |
+| XLSX, XLSM | Apply the same `SinglePageSheets` filter; also set `fitToPage=1`, `fitToWidth=1`, `fitToHeight=1`, and landscape orientation on every worksheet, and remove `scale` | Ensure each worksheet produces exactly one PDF page while keeping explicit page settings in the temporary OOXML copy |
 
 PPTX normalization applies only to preset shapes whose type is `line`. For each axis with a negative extent, it adds that extent to the offset and replaces the extent with its absolute value. This normalizes the representation while preserving the endpoints. When no target is changed, the original source is used directly.
 
@@ -216,6 +217,8 @@ Page numbers are zero-padded to at least four digits. For a document with 10,000
 `os.Create` replaces files with generated names that already exist. Unrelated files and stale numbered files beyond the page count of the current conversion are not removed.
 
 Output is not transactional. If rendering, encoding, saving, or cancellation fails on a later page, images already written for earlier pages remain in place. No `RenderResult` is returned on error. A caller that must expose only complete results should render into a dedicated temporary output directory and move it after success.
+
+For XLS, XLSX, and XLSM input, each exported worksheet corresponds to exactly one PDF page and one output image, in workbook order.
 
 ## Error Model
 
@@ -254,7 +257,7 @@ The library does not pre-limit page count, expanded document size, total pixel c
 
 `cmd/document-image-renderer` creates a context that handles operating-system signals and delegates to `internal/cli.Run`. The CLI exposes the library options as flags and accepts `SOURCE OUTPUT_DIRECTORY` as positional arguments.
 
-On success, generated image paths are written to standard output one per line in page order, followed by the path of one UTF-8 text file. The CLI writes `ExtractResult.Text()` to `<prefix>.txt`, using the source stem when no prefix is configured. Paths are emitted only after rendering, extraction, and text writing all succeed. Diagnostics and usage information are written to standard error. Exit codes have the following meanings:
+On success, each generated image path is followed by the path of its UTF-8 text file. A text file uses the same stem as its image, replacing the image extension with `.txt`. The CLI matches `RenderedImage.PageNumber` to `TextPart.PartNumber`; when no corresponding part exists, it writes an empty text file. This occurs for additional DOC or DOCX pages because those formats expose one document-body text part rather than rendered page boundaries. Paths are emitted only after rendering, extraction, and all text writes succeed. Diagnostics and usage information are written to standard error. Exit codes have the following meanings:
 
 | Exit code | Meaning |
 |---:|---|
@@ -262,7 +265,7 @@ On success, generated image paths are written to standard output one per line in
 | `1` | Rendering, extraction, or text output failed |
 | `2` | Flag parsing failed or positional arguments were invalid |
 
-The CLI contains no document conversion or extraction logic. It delegates to `renderer.RenderDocument` and `renderer.ExtractDocumentWithOptions`, then writes the joined text result.
+The CLI contains no document conversion or extraction logic. It delegates to `renderer.RenderDocument` and `renderer.ExtractDocumentWithOptions`, then writes one text artifact for each rendered image.
 
 ## Package Structure
 

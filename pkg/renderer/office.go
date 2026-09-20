@@ -46,13 +46,18 @@ func convertOfficeToPDF(
 	extension string,
 	options RenderOptions,
 ) (string, func(), error) {
-	conversionFilter := "pdf"
-	if extension == ".xls" {
-		conversionFilter = calcSinglePageFilter
-	}
 	return convertOffice(ctx, source, extension, officeConversion{
-		targetExtension: ".pdf", filter: conversionFilter, prepareSource: true,
+		targetExtension: ".pdf", filter: pdfConversionFilter(extension), prepareSource: true,
 	}, libreOfficeConfig{timeout: options.LibreOfficeTimeout, executable: options.LibreOfficeExecutable})
+}
+
+func pdfConversionFilter(extension string) string {
+	switch extension {
+	case ".xls", ".xlsx", ".xlsm":
+		return calcSinglePageFilter
+	default:
+		return "pdf"
+	}
 }
 
 func convertLegacyOfficeToOOXML(

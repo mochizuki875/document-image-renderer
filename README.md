@@ -16,7 +16,7 @@ PDF rendering uses PDFium compiled to WebAssembly through `go-pdfium`. It does n
 | XLS | Worksheet | Worksheet cell values after temporary XLSX conversion |
 | XLSX, XLSM | Worksheet | Worksheet cell values |
 
-Legacy DOC, PPT, and XLS files are converted to temporary OOXML files before text extraction. XLS uses LibreOffice's single-page-sheet export filter for rendering. XLSX and XLSM worksheets are adjusted on temporary copies to fit one landscape page per sheet. The source document is never modified.
+Legacy DOC, PPT, and XLS files are converted to temporary OOXML files before text extraction. All Excel formats use LibreOffice's single-page-sheet PDF export filter so that each worksheet produces exactly one image. XLSX and XLSM worksheets are also adjusted on temporary copies to fit one landscape page per sheet. The source document is never modified.
 
 ## Requirements
 
@@ -42,7 +42,7 @@ import (
 
 func main() {
 	ctx := context.Background()
-	source := "test/documents/samplefile.docx"
+	source := "test/documents/samplefile.xlsx"
 	outputDirectory := "example/output"
 	options := renderer.DefaultRenderOptions()
 	options.DPI = 200
@@ -63,12 +63,17 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	prefix := strings.TrimSuffix(filepath.Base(source), filepath.Ext(source))
-	textPath := filepath.Join(outputDirectory, prefix+".txt")
-	if err := os.WriteFile(textPath, []byte(extracted.Text()), 0o644); err != nil {
-		log.Fatal(err)
+	for _, image := range result.Images {
+		text := ""
+		if part, found := extracted.Part(image.PageNumber); found {
+			text = part.Text
+		}
+		textPath := strings.TrimSuffix(image.Path, filepath.Ext(image.Path)) + ".txt"
+		if err := os.WriteFile(textPath, []byte(text), 0o644); err != nil {
+			log.Fatal(err)
+		}
+		fmt.Println(textPath)
 	}
-	fmt.Println(textPath)
 }
 ```
 
@@ -103,7 +108,7 @@ Rendering is page-oriented rather than transactional. If a later page fails, ima
 | `LibreOfficeTimeout` | `120s` | Legacy Office conversion timeout |
 | `LibreOfficeExecutable` | auto-detected | Explicit LibreOffice executable path |
 
-`ExtractResult.Parts` preserves document order. `ExtractResult.Text()` joins all parts with a blank line without writing a file.
+`ExtractResult.Parts` preserves document order. `ExtractResult.Part(n)` finds a part by its one-based number, and `ExtractResult.Text()` joins all parts with a blank line without writing a file.
 
 ## Errors and cancellation
 
@@ -133,7 +138,9 @@ go run ./cmd/document-image-renderer \
   example/output
 ```
 
-Use `--help` for all options. Generated image paths are printed to standard output in page order, followed by the extracted text path. All extracted parts are joined with a blank line and written to `<prefix>.txt`, or to `<source-stem>.txt` when `--prefix` is omitted.
+Use `--help` for all options. Each generated image is followed on standard output by its corresponding text path. Text files use the same stem as their image, such as `samplefile-page-0001.png` and `samplefile-page-0001.txt`.
+
+PDF pages, PowerPoint slides, and Excel worksheets have matching image and text part numbers. DOC and DOCX extraction returns the document body as one part because OOXML does not define rendered page boundaries; additional rendered pages therefore receive empty text files.
 
 ## Development
 
