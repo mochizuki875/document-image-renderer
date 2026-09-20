@@ -24,8 +24,171 @@ Legacy DOC, PPT, and XLS files are converted to temporary OOXML files before tex
 - LibreOffice for Office rendering and legacy DOC, PPT, or XLS extraction
 - Fonts used by the source documents for stable Office layout
 
-## Library usage
+### Installing LibreOffice and Fonts
+No additional operating-system package is required when processing PDF input only.
+To process Office format files(e.g. DOC, DOCX, PPT, PPTX, XLS, XLSX, XLSM), install LibreOffice using the instructions below.
 
+<details><summary>Ubuntu and Debian</summary>
+
+Install Writer, Calc, Impress, and common Latin and Japanese fonts:
+
+```bash
+sudo apt-get update
+sudo apt-get install -y \
+	libreoffice-writer \
+	libreoffice-calc \
+	libreoffice-impress \
+	fonts-liberation \
+	fonts-noto-cjk \
+	fonts-crosextra-carlito
+```
+
+Verify the installation:
+
+```bash
+libreoffice --version
+```
+</details>
+
+<details><summary>Fedora</summary>
+
+Install LibreOffice and Noto fonts, including Japanese fonts:
+
+```bash
+sudo dnf install libreoffice google-noto-sans-cjk-fonts liberation-fonts
+```
+
+Verify the installation:
+
+```bash
+libreoffice --version
+```
+
+</details>
+
+<details><summary>macOS</summary>
+
+When using Homebrew, install the official LibreOffice application:
+
+```bash
+brew install --cask libreoffice
+```
+
+A standard macOS installation does not add `soffice` to `PATH`.
+Specify the executable path with `libreoffice_executable` when using the Python API:
+
+```python
+options = RenderOptions(
+	libreoffice_executable="/Applications/LibreOffice.app/Contents/MacOS/soffice",
+)
+result = render_document("samplefile.docx", "rendered", options=options)
+```
+
+To use the CLI or bundled example, add the LibreOffice directory to `PATH` in the current shell:
+
+```bash
+export PATH="/Applications/LibreOffice.app/Contents/MacOS:$PATH"
+```
+
+Verify the installation:
+
+```bash
+/Applications/LibreOffice.app/Contents/MacOS/soffice --version
+```
+
+</details>
+
+<details><summary>Windows</summary>
+
+When using WinGet, install the official LibreOffice package:
+
+```powershell
+winget install --id TheDocumentFoundation.LibreOffice --exact
+```
+
+Open a new terminal after installation.
+If `soffice.exe` is not on `PATH`, specify the executable path when using the Python API:
+
+```python
+options = RenderOptions(
+	libreoffice_executable=r"C:\Program Files\LibreOffice\program\soffice.exe",
+)
+result = render_document("samplefile.docx", "rendered", options=options)
+```
+
+To use the CLI or bundled example, add the LibreOffice directory to `PATH` in the current PowerShell session:
+
+```powershell
+$env:Path += ";C:\Program Files\LibreOffice\program"
+```
+
+Verify the installation:
+
+```powershell
+& "C:\Program Files\LibreOffice\program\soffice.exe" --version
+```
+
+</details>
+
+## Installation
+
+### Command-line tool
+
+Install the `document-image-renderer` command with `go install`:
+
+```bash
+go install github.com/mochizuki875/document-image-renderer/cmd/document-image-renderer@latest
+```
+
+The binary is placed in `$GOBIN`, or `$GOPATH/bin` when `GOBIN` is unset. Add that directory to `PATH` if it is not already there:
+
+```bash
+export PATH="$(go env GOPATH)/bin:$PATH"
+```
+
+Verify the installation:
+
+```bash
+document-image-renderer --help
+```
+
+```bash
+document-image-renderer [options] SOURCE OUTPUT_DIRECTORY
+```
+
+Example:
+
+```bash
+document-image-renderer \
+  --dpi 200 \
+  --format png \
+  test/documents/samplefile.docx \
+  example/output
+```
+
+Each generated image is followed on standard output by its corresponding text path. Text files use the same stem as their image, such as `samplefile-page-0001.png` and `samplefile-page-0001.txt`.
+
+PDF pages, PowerPoint slides, and Excel worksheets have matching image and text part numbers. DOC and DOCX extraction returns the document body as one part because OOXML does not define rendered page boundaries; additional rendered pages therefore receive empty text files.
+
+### Library
+
+Add the module as a dependency of your Go project:
+
+```bash
+go get github.com/mochizuki875/document-image-renderer
+```
+
+Then import the renderer package:
+
+```go
+import "github.com/mochizuki875/document-image-renderer/pkg/renderer"
+```
+
+<details><summary>Library usage example</summary>
+
+Pass `nil` render options to use the defaults. Use `DefaultRenderOptions` before overriding individual fields. `ExtractDocument` uses default dependency settings; use `ExtractDocumentWithOptions` and `DefaultExtractOptions` to set the LibreOffice timeout or executable used for legacy Office extraction.
+
+`example/example.go`
 ```go
 package main
 
@@ -83,7 +246,7 @@ Example:
 go run example/example.go
 ```
 
-Pass `nil` render options to use the defaults. Use `DefaultRenderOptions` before overriding individual fields. `ExtractDocument` uses default dependency settings; use `ExtractDocumentWithOptions` and `DefaultExtractOptions` to set the LibreOffice timeout or executable used for legacy Office extraction.
+</details>
 
 ## Render options
 
@@ -121,26 +284,6 @@ Rendering is page-oriented rather than transactional. If a later page fails, ima
 - `DocumentExtractionError`
 
 `DocumentConversionError` retains LibreOffice standard output and standard error for diagnostics. Input-validation and filesystem errors may be returned directly.
-
-## CLI
-
-```bash
-go run ./cmd/document-image-renderer [options] SOURCE OUTPUT_DIRECTORY
-```
-
-Example:
-
-```bash
-go run ./cmd/document-image-renderer \
-  --dpi 200 \
-  --format png \
-  test/documents/samplefile.docx \
-  example/output
-```
-
-Use `--help` for all options. Each generated image is followed on standard output by its corresponding text path. Text files use the same stem as their image, such as `samplefile-page-0001.png` and `samplefile-page-0001.txt`.
-
-PDF pages, PowerPoint slides, and Excel worksheets have matching image and text part numbers. DOC and DOCX extraction returns the document body as one part because OOXML does not define rendered page boundaries; additional rendered pages therefore receive empty text files.
 
 ## Development
 
