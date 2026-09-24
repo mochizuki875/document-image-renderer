@@ -7,7 +7,7 @@ func TestDefaultRenderOptionsAreValid(t *testing.T) {
 	if err := options.Validate(); err != nil {
 		t.Fatalf("default options must be valid: %v", err)
 	}
-	if options.DPI != 200 || options.ImageFormat != ImageFormatPNG || options.JPEGQuality != 90 {
+	if options.DPI != 300 || options.ImageFormat != ImageFormatPNG || options.JPEGQuality != 90 {
 		t.Fatalf("unexpected defaults: %+v", options)
 	}
 }

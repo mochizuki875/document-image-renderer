@@ -113,7 +113,7 @@ for _, image := range result.Images {
 
 | Field | Default | Constraint and meaning |
 |---|---:|---|
-| `DPI` | `200` | Rendering resolution from 1 through 1200 DPI |
+| `DPI` | `300` | Rendering resolution from 1 through 1200 DPI |
 | `ImageFormat` | `png` | `ImageFormatPNG` or `ImageFormatJPEG` |
 | `JPEGQuality` | `90` | Value from 1 through 100; validated even for PNG output |
 | `TransparentBackground` | `false` | Preserve the PDF page background alpha in PNG output |

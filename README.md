@@ -252,7 +252,7 @@ go run example/example.go
 
 | Field | Default | Description |
 |---|---:|---|
-| `DPI` | `200` | Resolution from 1 to 1200 DPI |
+| `DPI` | `300` | Resolution from 1 to 1200 DPI |
 | `ImageFormat` | `png` | `png` or `jpeg` |
 | `JPEGQuality` | `90` | JPEG quality from 1 to 100 |
 | `TransparentBackground` | `false` | Preserve a transparent PDF page background in PNG |

@@ -48,7 +48,7 @@ func (options ExtractOptions) Validate() error {
 // DefaultRenderOptions returns the default rendering configuration.
 func DefaultRenderOptions() RenderOptions {
 	return RenderOptions{
-		DPI:                200,
+		DPI:                300,
 		ImageFormat:        ImageFormatPNG,
 		JPEGQuality:        90,
 		LibreOfficeTimeout: 120 * time.Second,
