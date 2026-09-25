@@ -253,6 +253,7 @@ go run example/example.go
 | Field | Default | Description |
 |---|---:|---|
 | `DPI` | `300` | Resolution from 1 to 1200 DPI |
+| `MaxPages` | `0` | Maximum pages to render; `0` permits unlimited pages |
 | `ImageFormat` | `png` | `png` or `jpeg` |
 | `JPEGQuality` | `90` | JPEG quality from 1 to 100 |
 | `TransparentBackground` | `false` | Preserve a transparent PDF page background in PNG |
@@ -263,6 +264,8 @@ go run example/example.go
 Output names use `<prefix>-page-0001.png` or `.jpg`. Existing files with the same names are replaced; unrelated output files remain untouched.
 
 Rendering is page-oriented rather than transactional. If a later page fails, images already written for earlier pages remain in the output directory. The returned `RenderResult.Source` is the absolute input path.
+
+`MaxPages` rejects PDFs before any image is rendered when their page count exceeds the limit. Office documents are first converted to a temporary PDF by LibreOffice, then rejected before image rendering when that PDF exceeds the limit.
 
 ## Extract options
 
@@ -282,6 +285,7 @@ Rendering is page-oriented rather than transactional. If a later page fails, ima
 - `DocumentConversionError`
 - `DocumentRenderError`
 - `DocumentExtractionError`
+- `PageLimitExceededError`
 
 `DocumentConversionError` retains LibreOffice standard output and standard error for diagnostics. Input-validation and filesystem errors may be returned directly.
 

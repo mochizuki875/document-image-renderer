@@ -2,6 +2,16 @@ package renderer
 
 import "fmt"
 
+// PageLimitExceededError reports a document that exceeds the configured render page limit.
+type PageLimitExceededError struct {
+	PageCount int
+	MaxPages  int
+}
+
+func (err *PageLimitExceededError) Error() string {
+	return fmt.Sprintf("document has %d pages, exceeding the limit of %d", err.PageCount, err.MaxPages)
+}
+
 // UnsupportedFormatError reports an unsupported input extension.
 type UnsupportedFormatError struct {
 	Extension string

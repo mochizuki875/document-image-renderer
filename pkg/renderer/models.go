@@ -18,6 +18,7 @@ const (
 // RenderOptions controls page rasterization and LibreOffice execution.
 type RenderOptions struct {
 	DPI                   int
+	MaxPages              int
 	ImageFormat           ImageFormat
 	JPEGQuality           int
 	TransparentBackground bool
@@ -59,6 +60,9 @@ func DefaultRenderOptions() RenderOptions {
 func (options RenderOptions) Validate() error {
 	if options.DPI < 1 || options.DPI > 1200 {
 		return fmt.Errorf("dpi must be between 1 and 1200")
+	}
+	if options.MaxPages < 0 {
+		return fmt.Errorf("max pages must not be negative")
 	}
 	if options.ImageFormat != ImageFormatPNG && options.ImageFormat != ImageFormatJPEG {
 		return fmt.Errorf("image format must be %q or %q", ImageFormatPNG, ImageFormatJPEG)

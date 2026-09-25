@@ -21,6 +21,7 @@ func Run(ctx context.Context, arguments []string, stdout, stderr io.Writer) int 
 	flags := flag.NewFlagSet("document-image-renderer", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	dpi := flags.Int("dpi", defaults.DPI, "rendering resolution")
+	maxPages := flags.Int("max-pages", defaults.MaxPages, "maximum pages to render (0 for unlimited)")
 	imageFormat := flags.String("format", string(defaults.ImageFormat), "output format: png or jpeg")
 	jpegQuality := flags.Int("jpeg-quality", defaults.JPEGQuality, "JPEG quality from 1 to 100")
 	prefix := flags.String("prefix", "", "output file name prefix")
@@ -44,6 +45,7 @@ func Run(ctx context.Context, arguments []string, stdout, stderr io.Writer) int 
 
 	options := renderer.RenderOptions{
 		DPI:                   *dpi,
+		MaxPages:              *maxPages,
 		ImageFormat:           renderer.ImageFormat(*imageFormat),
 		JPEGQuality:           *jpegQuality,
 		TransparentBackground: *transparent,

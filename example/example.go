@@ -13,11 +13,12 @@ import (
 
 func main() {
 	ctx := context.Background()
-	source := "test/documents/samplefile.xlsx"
+	source := "test/documents/samplefile.docx"
 	outputDirectory := "example/output"
 	options := renderer.DefaultRenderOptions()
 	options.DPI = 200
 	options.ImageFormat = renderer.ImageFormatPNG
+	options.MaxPages = 3
 
 	result, err := renderer.RenderDocument(
 		ctx,

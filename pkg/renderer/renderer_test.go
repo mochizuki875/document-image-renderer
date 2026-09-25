@@ -43,6 +43,25 @@ func TestRenderDocumentRendersEveryPDFPage(t *testing.T) {
 	}
 }
 
+func TestRenderDocumentRejectsPDFExceedingMaxPages(t *testing.T) {
+	options := DefaultRenderOptions()
+	options.MaxPages = 1
+
+	_, err := RenderDocument(
+		context.Background(),
+		fixturePath("samplefile.pdf"),
+		t.TempDir(),
+		&options,
+	)
+	var exceeded *PageLimitExceededError
+	if !errors.As(err, &exceeded) {
+		t.Fatalf("expected PageLimitExceededError, got %v", err)
+	}
+	if exceeded.MaxPages != options.MaxPages || exceeded.PageCount <= exceeded.MaxPages {
+		t.Fatalf("unexpected page limit error: %+v", exceeded)
+	}
+}
+
 func TestRenderDocumentWritesJPEGWithCustomPrefix(t *testing.T) {
 	options := DefaultRenderOptions()
 	options.ImageFormat = ImageFormatJPEG

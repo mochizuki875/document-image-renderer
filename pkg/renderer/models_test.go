@@ -25,6 +25,7 @@ func TestDefaultExtractOptionsAreValid(t *testing.T) {
 func TestRenderOptionsRejectInvalidValues(t *testing.T) {
 	tests := map[string]func(*RenderOptions){
 		"dpi":          func(options *RenderOptions) { options.DPI = 0 },
+		"max pages":    func(options *RenderOptions) { options.MaxPages = -1 },
 		"image format": func(options *RenderOptions) { options.ImageFormat = "gif" },
 		"jpeg quality": func(options *RenderOptions) { options.JPEGQuality = 101 },
 		"jpeg transparency": func(options *RenderOptions) {

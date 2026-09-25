@@ -26,6 +26,9 @@ func renderPDF(
 	options RenderOptions,
 ) ([]RenderedImage, error) {
 	images, err := withPDFDocument(ctx, pdfPath, func(instance pdfium.Pdfium, document references.FPDF_DOCUMENT, pageCount int) ([]RenderedImage, error) {
+		if options.MaxPages > 0 && pageCount > options.MaxPages {
+			return nil, &PageLimitExceededError{PageCount: pageCount, MaxPages: options.MaxPages}
+		}
 		pageDigits := max(4, len(fmt.Sprintf("%d", pageCount)))
 		images := make([]RenderedImage, 0, pageCount)
 		for pageIndex := 0; pageIndex < pageCount; pageIndex++ {
