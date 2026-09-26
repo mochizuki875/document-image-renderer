@@ -22,6 +22,14 @@ func TestDefaultExtractOptionsAreValid(t *testing.T) {
 	}
 }
 
+func TestExtractOptionsRejectNegativeMaxCharacters(t *testing.T) {
+	options := DefaultExtractOptions()
+	options.MaxCharacters = -1
+	if err := options.Validate(); err == nil {
+		t.Fatal("expected validation error")
+	}
+}
+
 func TestRenderOptionsRejectInvalidValues(t *testing.T) {
 	tests := map[string]func(*RenderOptions){
 		"dpi":          func(options *RenderOptions) { options.DPI = 0 },
@@ -31,7 +39,7 @@ func TestRenderOptionsRejectInvalidValues(t *testing.T) {
 		"jpeg transparency": func(options *RenderOptions) {
 			options.ImageFormat, options.TransparentBackground = ImageFormatJPEG, true
 		},
-		"timeout":            func(options *RenderOptions) { options.LibreOfficeTimeout = 0 },
+		"timeout":            func(options *RenderOptions) { options.LibreOfficeTimeout = -1 },
 		"filename traversal": func(options *RenderOptions) { options.FilenamePrefix = "../outside" },
 	}
 
@@ -43,6 +51,20 @@ func TestRenderOptionsRejectInvalidValues(t *testing.T) {
 				t.Fatal("expected validation error")
 			}
 		})
+	}
+}
+
+func TestOptionsAllowUnlimitedLibreOfficeTimeout(t *testing.T) {
+	renderOptions := DefaultRenderOptions()
+	renderOptions.LibreOfficeTimeout = 0
+	if err := renderOptions.Validate(); err != nil {
+		t.Fatalf("render options must allow an unlimited timeout: %v", err)
+	}
+
+	extractOptions := DefaultExtractOptions()
+	extractOptions.LibreOfficeTimeout = 0
+	if err := extractOptions.Validate(); err != nil {
+		t.Fatalf("extract options must allow an unlimited timeout: %v", err)
 	}
 }
 

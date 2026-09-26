@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"unicode/utf8"
 )
 
 // ExtractDocument extracts text from each document unit in source order.
@@ -46,7 +47,24 @@ func ExtractDocumentWithOptions(ctx context.Context, source string, options *Ext
 		}
 		return nil, &DocumentExtractionError{Path: sourcePath, Err: err}
 	}
+	if err := validateCharacterLimit(parts, extractOptions.MaxCharacters); err != nil {
+		return nil, &DocumentExtractionError{Path: sourcePath, Err: err}
+	}
 	return &ExtractResult{Source: sourcePath, Parts: parts}, nil
+}
+
+func validateCharacterLimit(parts []TextPart, maxCharacters int) error {
+	if maxCharacters == 0 {
+		return nil
+	}
+	characterCount := 0
+	for _, part := range parts {
+		characterCount += utf8.RuneCountInString(part.Text)
+	}
+	if characterCount > maxCharacters {
+		return &CharacterLimitExceededError{CharacterCount: characterCount, MaxCharacters: maxCharacters}
+	}
+	return nil
 }
 
 func extractLegacyOfficeText(ctx context.Context, source, extension string, options ExtractOptions) ([]TextPart, error) {

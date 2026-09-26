@@ -43,6 +43,29 @@ func TestRenderDocumentRendersEveryPDFPage(t *testing.T) {
 	}
 }
 
+func TestPageCountCountsPDFWithoutRendering(t *testing.T) {
+	pageCount, err := PageCount(context.Background(), fixturePath("samplefile.pdf"))
+	if err != nil {
+		t.Fatalf("count PDF pages: %v", err)
+	}
+	if pageCount == 0 {
+		t.Fatal("expected at least one page")
+	}
+}
+
+func TestPageCountWrapsPDFErrors(t *testing.T) {
+	source := filepath.Join(t.TempDir(), "invalid.pdf")
+	if err := os.WriteFile(source, []byte("not a PDF"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := PageCount(context.Background(), source)
+	var countError *DocumentPageCountError
+	if !errors.As(err, &countError) {
+		t.Fatalf("expected DocumentPageCountError, got %v", err)
+	}
+}
+
 func TestRenderDocumentRejectsPDFExceedingMaxPages(t *testing.T) {
 	options := DefaultRenderOptions()
 	options.MaxPages = 1
@@ -136,6 +159,20 @@ func TestExtractDocumentExtractsEveryPDFPage(t *testing.T) {
 		if part.PartNumber != index+1 {
 			t.Fatalf("unexpected part number: %d", part.PartNumber)
 		}
+	}
+}
+
+func TestExtractDocumentRejectsTextExceedingMaxCharacters(t *testing.T) {
+	options := DefaultExtractOptions()
+	options.MaxCharacters = 1
+
+	_, err := ExtractDocumentWithOptions(context.Background(), fixturePath("samplefile.pdf"), &options)
+	var exceeded *CharacterLimitExceededError
+	if !errors.As(err, &exceeded) {
+		t.Fatalf("expected CharacterLimitExceededError, got %v", err)
+	}
+	if exceeded.MaxCharacters != options.MaxCharacters || exceeded.CharacterCount <= exceeded.MaxCharacters {
+		t.Fatalf("unexpected character limit error: %+v", exceeded)
 	}
 }
 

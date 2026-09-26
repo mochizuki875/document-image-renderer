@@ -47,6 +47,58 @@ func TestConvertOfficeUsesIsolatedProfile(t *testing.T) {
 	}
 }
 
+func TestPageCountConvertsOfficeDocument(t *testing.T) {
+	source := filepath.Join(t.TempDir(), "input.docx")
+	if err := os.WriteFile(source, []byte("placeholder"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	replaceLibreOfficeFunctions(t)
+	findExecutable = func(string) (string, error) { return "/usr/bin/libreoffice", nil }
+	executeLibreOffice = func(_ context.Context, executable string, arguments []string) (string, string, error) {
+		if executable != "/usr/bin/libreoffice" {
+			t.Fatalf("unexpected executable: %s", executable)
+		}
+		outputDirectory := argumentAfter(t, arguments, "--outdir")
+		copyFixture(t, fixturePath("samplefile.pdf"), filepath.Join(outputDirectory, "input.pdf"))
+		return "", "", nil
+	}
+
+	pageCount, err := PageCount(context.Background(), source)
+	if err != nil {
+		t.Fatalf("count Office document pages: %v", err)
+	}
+	if pageCount == 0 {
+		t.Fatal("expected at least one page")
+	}
+}
+
+func TestConvertOfficeAllowsUnlimitedTimeout(t *testing.T) {
+	source := filepath.Join(t.TempDir(), "input.docx")
+	if err := os.WriteFile(source, []byte("placeholder"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	replaceLibreOfficeFunctions(t)
+	findExecutable = func(string) (string, error) { return "/usr/bin/libreoffice", nil }
+	executeLibreOffice = func(ctx context.Context, _ string, arguments []string) (string, string, error) {
+		if _, hasDeadline := ctx.Deadline(); hasDeadline {
+			t.Fatal("unlimited timeout unexpectedly set a deadline")
+		}
+		outputDirectory := argumentAfter(t, arguments, "--outdir")
+		copyFixture(t, fixturePath("samplefile.pdf"), filepath.Join(outputDirectory, "input.pdf"))
+		return "", "", nil
+	}
+
+	options := DefaultRenderOptions()
+	options.LibreOfficeTimeout = 0
+	result, err := RenderDocument(context.Background(), source, t.TempDir(), &options)
+	if err != nil {
+		t.Fatalf("render Office document: %v", err)
+	}
+	if result.PageCount() == 0 {
+		t.Fatal("expected at least one rendered page")
+	}
+}
+
 func TestExcelFormatsUseSinglePageFilter(t *testing.T) {
 	for _, extension := range []string{".xls", ".xlsx", ".xlsm"} {
 		t.Run(extension, func(t *testing.T) {

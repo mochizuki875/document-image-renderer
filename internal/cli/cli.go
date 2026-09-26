@@ -22,6 +22,7 @@ func Run(ctx context.Context, arguments []string, stdout, stderr io.Writer) int 
 	flags.SetOutput(stderr)
 	dpi := flags.Int("dpi", defaults.DPI, "rendering resolution")
 	maxPages := flags.Int("max-pages", defaults.MaxPages, "maximum pages to render (0 for unlimited)")
+	maxCharacters := flags.Int("max-characters", 0, "maximum characters to extract (0 for unlimited)")
 	imageFormat := flags.String("format", string(defaults.ImageFormat), "output format: png or jpeg")
 	jpegQuality := flags.Int("jpeg-quality", defaults.JPEGQuality, "JPEG quality from 1 to 100")
 	prefix := flags.String("prefix", "", "output file name prefix")
@@ -53,6 +54,15 @@ func Run(ctx context.Context, arguments []string, stdout, stderr io.Writer) int 
 		LibreOfficeTimeout:    time.Duration(*timeout * float64(time.Second)),
 		LibreOfficeExecutable: *libreOffice,
 	}
+	extractOptions := renderer.ExtractOptions{
+		MaxCharacters:         *maxCharacters,
+		LibreOfficeTimeout:    options.LibreOfficeTimeout,
+		LibreOfficeExecutable: options.LibreOfficeExecutable,
+	}
+	if err := extractOptions.Validate(); err != nil {
+		fmt.Fprintf(stderr, "error: %v\n", err)
+		return 1
+	}
 	outputDirectory, err := filepath.Abs(flags.Arg(1))
 	if err != nil {
 		fmt.Fprintf(stderr, "error: resolve output directory: %v\n", err)
@@ -63,10 +73,7 @@ func Run(ctx context.Context, arguments []string, stdout, stderr io.Writer) int 
 		fmt.Fprintf(stderr, "error: %v\n", err)
 		return 1
 	}
-	extracted, err := renderer.ExtractDocumentWithOptions(ctx, flags.Arg(0), &renderer.ExtractOptions{
-		LibreOfficeTimeout:    options.LibreOfficeTimeout,
-		LibreOfficeExecutable: options.LibreOfficeExecutable,
-	})
+	extracted, err := renderer.ExtractDocumentWithOptions(ctx, flags.Arg(0), &extractOptions)
 	if err != nil {
 		fmt.Fprintf(stderr, "error: %v\n", err)
 		return 1

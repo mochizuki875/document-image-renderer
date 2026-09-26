@@ -12,6 +12,16 @@ func (err *PageLimitExceededError) Error() string {
 	return fmt.Sprintf("document has %d pages, exceeding the limit of %d", err.PageCount, err.MaxPages)
 }
 
+// CharacterLimitExceededError reports text extraction that exceeds the configured character limit.
+type CharacterLimitExceededError struct {
+	CharacterCount int
+	MaxCharacters  int
+}
+
+func (err *CharacterLimitExceededError) Error() string {
+	return fmt.Sprintf("extracted text has %d characters, exceeding the limit of %d", err.CharacterCount, err.MaxCharacters)
+}
+
 // UnsupportedFormatError reports an unsupported input extension.
 type UnsupportedFormatError struct {
 	Extension string
@@ -49,6 +59,18 @@ func (err *DocumentConversionError) Error() string {
 }
 
 func (err *DocumentConversionError) Unwrap() error { return err.Err }
+
+// DocumentPageCountError reports a failure while counting a document's rendered pages.
+type DocumentPageCountError struct {
+	Path string
+	Err  error
+}
+
+func (err *DocumentPageCountError) Error() string {
+	return fmt.Sprintf("could not count pages in document %q: %v", err.Path, err.Err)
+}
+
+func (err *DocumentPageCountError) Unwrap() error { return err.Err }
 
 // DocumentRenderError reports a PDF rasterization failure.
 type DocumentRenderError struct {

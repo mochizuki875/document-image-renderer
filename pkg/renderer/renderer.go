@@ -20,6 +20,46 @@ var supportedExtensions = map[string]struct{}{
 	".xlsx": {},
 }
 
+// PageCount returns the rendered page count of a PDF or Office document.
+func PageCount(ctx context.Context, source string) (int, error) {
+	return PageCountWithOptions(ctx, source, nil)
+}
+
+// PageCountWithOptions returns the rendered page count using the supplied dependency options.
+// Office documents are converted to a temporary PDF before their pages are counted.
+func PageCountWithOptions(ctx context.Context, source string, options *ExtractOptions) (int, error) {
+	extractOptions := DefaultExtractOptions()
+	if options != nil {
+		extractOptions = *options
+	}
+	if err := extractOptions.Validate(); err != nil {
+		return 0, err
+	}
+
+	sourcePath, extension, err := validateDocument(ctx, source)
+	if err != nil {
+		return 0, err
+	}
+	pdfPath := sourcePath
+	cleanup := func() {}
+	if extension != ".pdf" {
+		pdfPath, cleanup, err = convertOfficeToPDF(ctx, sourcePath, extension, RenderOptions{
+			LibreOfficeTimeout:    extractOptions.LibreOfficeTimeout,
+			LibreOfficeExecutable: extractOptions.LibreOfficeExecutable,
+		})
+		if err != nil {
+			return 0, err
+		}
+		defer cleanup()
+	}
+
+	pageCount, err := pdfPageCount(ctx, pdfPath)
+	if err != nil {
+		return 0, &DocumentPageCountError{Path: sourcePath, Err: err}
+	}
+	return pageCount, nil
+}
+
 // RenderDocument renders every page in a PDF or Office document to an image.
 func RenderDocument(
 	ctx context.Context,

@@ -258,8 +258,10 @@ go run example/example.go
 | `JPEGQuality` | `90` | JPEG quality from 1 to 100 |
 | `TransparentBackground` | `false` | Preserve a transparent PDF page background in PNG |
 | `FilenamePrefix` | source stem | Output filename prefix |
-| `LibreOfficeTimeout` | `120s` | Office conversion timeout |
+| `LibreOfficeTimeout` | `120s` | Office conversion timeout; `0` permits unlimited time |
 | `LibreOfficeExecutable` | auto-detected | Explicit LibreOffice executable path |
+
+The command-line tool also accepts `--max-characters` to limit extracted Unicode characters; `0` permits unlimited characters.
 
 Output names use `<prefix>-page-0001.png` or `.jpg`. Existing files with the same names are replaced; unrelated output files remain untouched.
 
@@ -267,14 +269,23 @@ Rendering is page-oriented rather than transactional. If a later page fails, ima
 
 `MaxPages` rejects PDFs before any image is rendered when their page count exceeds the limit. Office documents are first converted to a temporary PDF by LibreOffice, then rejected before image rendering when that PDF exceeds the limit.
 
+## Page counts
+
+`PageCount` returns a document's rendered page count without creating images or extracting text. For Office documents, it first performs the same temporary PDF conversion used for rendering. Use `PageCountWithOptions` with `ExtractOptions` to configure the LibreOffice timeout or executable.
+
+```go
+pages, err := renderer.PageCount(ctx, "report.docx")
+```
+
 ## Extract options
 
 | Field | Default | Description |
 |---|---:|---|
-| `LibreOfficeTimeout` | `120s` | Legacy Office conversion timeout |
+| `MaxCharacters` | `0` | Maximum extracted Unicode characters; `0` permits unlimited characters |
+| `LibreOfficeTimeout` | `120s` | Legacy Office conversion timeout; `0` permits unlimited time |
 | `LibreOfficeExecutable` | auto-detected | Explicit LibreOffice executable path |
 
-`ExtractResult.Parts` preserves document order. `ExtractResult.Part(n)` finds a part by its one-based number, and `ExtractResult.Text()` joins all parts with a blank line without writing a file.
+`MaxCharacters` counts the Unicode characters in all extracted parts. Extractions that exceed the limit fail with `CharacterLimitExceededError`; no partial result is returned. `ExtractResult.Parts` preserves document order. `ExtractResult.Part(n)` finds a part by its one-based number, and `ExtractResult.Text()` joins all parts with a blank line without writing a file.
 
 ## Errors and cancellation
 
@@ -283,9 +294,11 @@ Rendering is page-oriented rather than transactional. If a later page fails, ima
 - `UnsupportedFormatError`
 - `DependencyNotFoundError`
 - `DocumentConversionError`
+- `DocumentPageCountError`
 - `DocumentRenderError`
 - `DocumentExtractionError`
 - `PageLimitExceededError`
+- `CharacterLimitExceededError`
 
 `DocumentConversionError` retains LibreOffice standard output and standard error for diagnostics. Input-validation and filesystem errors may be returned directly.
 

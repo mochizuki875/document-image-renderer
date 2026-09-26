@@ -53,6 +53,12 @@ func renderPDF(
 	return images, nil
 }
 
+func pdfPageCount(ctx context.Context, source string) (int, error) {
+	return withPDFDocument(ctx, source, func(_ pdfium.Pdfium, _ references.FPDF_DOCUMENT, pageCount int) (int, error) {
+		return pageCount, nil
+	})
+}
+
 func extractPDFText(ctx context.Context, source string) ([]TextPart, error) {
 	parts, err := withPDFDocument(ctx, source, func(instance pdfium.Pdfium, document references.FPDF_DOCUMENT, pageCount int) ([]TextPart, error) {
 		parts := make([]TextPart, 0, pageCount)

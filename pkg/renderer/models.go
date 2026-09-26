@@ -29,6 +29,7 @@ type RenderOptions struct {
 
 // ExtractOptions controls dependencies used during text extraction.
 type ExtractOptions struct {
+	MaxCharacters         int
 	LibreOfficeTimeout    time.Duration
 	LibreOfficeExecutable string
 }
@@ -40,8 +41,11 @@ func DefaultExtractOptions() ExtractOptions {
 
 // Validate checks whether all extraction option values are valid.
 func (options ExtractOptions) Validate() error {
-	if options.LibreOfficeTimeout <= 0 {
-		return fmt.Errorf("libreoffice timeout must be greater than zero")
+	if options.MaxCharacters < 0 {
+		return fmt.Errorf("max characters must not be negative")
+	}
+	if options.LibreOfficeTimeout < 0 {
+		return fmt.Errorf("libreoffice timeout must not be negative")
 	}
 	return nil
 }
@@ -73,8 +77,8 @@ func (options RenderOptions) Validate() error {
 	if options.ImageFormat == ImageFormatJPEG && options.TransparentBackground {
 		return fmt.Errorf("JPEG does not support a transparent background")
 	}
-	if options.LibreOfficeTimeout <= 0 {
-		return fmt.Errorf("libreoffice timeout must be greater than zero")
+	if options.LibreOfficeTimeout < 0 {
+		return fmt.Errorf("libreoffice timeout must not be negative")
 	}
 	if options.FilenamePrefix != "" && filepath.Base(options.FilenamePrefix) != options.FilenamePrefix {
 		return fmt.Errorf("filename prefix must be a file name component")

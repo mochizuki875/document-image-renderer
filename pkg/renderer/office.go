@@ -150,10 +150,14 @@ func convertOffice(
 		conversionSource,
 	}
 
-	timeoutContext, cancel := context.WithTimeout(ctx, config.timeout)
+	commandContext := ctx
+	cancel := func() {}
+	if config.timeout > 0 {
+		commandContext, cancel = context.WithTimeout(ctx, config.timeout)
+	}
 	defer cancel()
-	stdout, stderr, commandErr := executeLibreOffice(timeoutContext, executable, arguments)
-	if timeoutErr := timeoutContext.Err(); errors.Is(timeoutErr, context.DeadlineExceeded) {
+	stdout, stderr, commandErr := executeLibreOffice(commandContext, executable, arguments)
+	if timeoutErr := commandContext.Err(); errors.Is(timeoutErr, context.DeadlineExceeded) {
 		return fail(fmt.Errorf("LibreOffice timed out: %w", timeoutErr), stdout, stderr)
 	}
 	if commandErr != nil {

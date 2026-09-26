@@ -72,6 +72,17 @@ func TestRunRejectsNegativeMaxPages(t *testing.T) {
 	}
 }
 
+func TestRunRejectsNegativeMaxCharacters(t *testing.T) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	if exitCode := Run(context.Background(), []string{"--max-characters", "-1", "input.pdf", t.TempDir()}, &stdout, &stderr); exitCode != 1 {
+		t.Fatalf("unexpected exit code: %d", exitCode)
+	}
+	if !strings.Contains(stderr.String(), "max characters must not be negative") {
+		t.Fatalf("unexpected error: %s", stderr.String())
+	}
+}
+
 func TestRunRequiresSourceAndOutput(t *testing.T) {
 	var output bytes.Buffer
 	if exitCode := Run(context.Background(), nil, &output, &output); exitCode != 2 {
