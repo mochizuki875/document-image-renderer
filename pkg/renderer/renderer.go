@@ -9,6 +9,9 @@ import (
 	"strings"
 )
 
+// supportedExtensions lists every input format accepted by the renderer.
+// Legacy formats (.doc, .ppt, .xls) are handled by converting them through
+// LibreOffice before rendering or extraction.
 var supportedExtensions = map[string]struct{}{
 	".doc":  {},
 	".docx": {},
@@ -40,6 +43,7 @@ func PageCountWithOptions(ctx context.Context, source string, options *ExtractOp
 	if err != nil {
 		return 0, err
 	}
+	// PDFs can be counted directly; other formats need a temporary conversion.
 	pdfPath := sourcePath
 	cleanup := func() {}
 	if extension != ".pdf" {
@@ -87,11 +91,13 @@ func RenderDocument(
 		return nil, fmt.Errorf("create output directory: %w", err)
 	}
 
+	// Default the output file prefix to the source file name without its extension.
 	prefix := renderOptions.FilenamePrefix
 	if prefix == "" {
 		prefix = strings.TrimSuffix(filepath.Base(sourcePath), filepath.Ext(sourcePath))
 	}
 
+	// PDFs can be rendered directly; other formats need a temporary conversion.
 	pdfPath := sourcePath
 	cleanup := func() {}
 	if extension != ".pdf" {
@@ -109,6 +115,9 @@ func RenderDocument(
 	return &RenderResult{Source: sourcePath, Images: images}, nil
 }
 
+// validateDocument resolves the source to an absolute path and verifies that it
+// exists, is a regular file, and has a supported extension. It returns the
+// absolute path together with the lower-cased extension.
 func validateDocument(ctx context.Context, source string) (string, string, error) {
 	if ctx == nil {
 		return "", "", fmt.Errorf("context must not be nil")

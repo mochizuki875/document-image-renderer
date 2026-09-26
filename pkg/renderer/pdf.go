@@ -18,6 +18,8 @@ import (
 	"github.com/klippa-app/go-pdfium/webassembly"
 )
 
+// renderPDF rasterizes every page of a PDF into the output directory and
+// returns the generated images in page order.
 func renderPDF(
 	ctx context.Context,
 	pdfPath string,
@@ -29,6 +31,7 @@ func renderPDF(
 		if options.MaxPages > 0 && pageCount > options.MaxPages {
 			return nil, &PageLimitExceededError{PageCount: pageCount, MaxPages: options.MaxPages}
 		}
+		// Pad page numbers to at least four digits so file names sort correctly.
 		pageDigits := max(4, len(fmt.Sprintf("%d", pageCount)))
 		images := make([]RenderedImage, 0, pageCount)
 		for pageIndex := 0; pageIndex < pageCount; pageIndex++ {
@@ -59,6 +62,7 @@ func pdfPageCount(ctx context.Context, source string) (int, error) {
 	})
 }
 
+// extractPDFText extracts the text of every PDF page, one TextPart per page.
 func extractPDFText(ctx context.Context, source string) ([]TextPart, error) {
 	parts, err := withPDFDocument(ctx, source, func(instance pdfium.Pdfium, document references.FPDF_DOCUMENT, pageCount int) ([]TextPart, error) {
 		parts := make([]TextPart, 0, pageCount)
@@ -82,6 +86,8 @@ func extractPDFText(ctx context.Context, source string) ([]TextPart, error) {
 	return parts, nil
 }
 
+// withPDFDocument opens a PDF with PDFium, runs use with the document handle
+// and page count, and guarantees that all PDFium resources are released.
 func withPDFDocument[T any](
 	ctx context.Context,
 	path string,
@@ -92,6 +98,7 @@ func withPDFDocument[T any](
 	if err != nil {
 		return zero, err
 	}
+	// A single-instance pool keeps memory usage low; PDFium is used serially.
 	pool, err := webassembly.Init(webassembly.Config{MinIdle: 1, MaxIdle: 1, MaxTotal: 1})
 	if err != nil {
 		return zero, fmt.Errorf("initialize PDFium: %w", err)
@@ -114,6 +121,9 @@ func withPDFDocument[T any](
 	return use(instance, document.Document, pageCount.PageCount)
 }
 
+// renderPage rasterizes a single PDF page to imagePath and returns its metadata.
+// With TransparentBackground the page is rendered onto an alpha bitmap;
+// otherwise the page is composited onto a white background.
 func renderPage(
 	instance pdfium.Pdfium,
 	document references.FPDF_DOCUMENT,
@@ -170,6 +180,9 @@ func imageExtension(format ImageFormat) string {
 	return "png"
 }
 
+// renderTransparentPage renders a page into an RGBA bitmap with a fully
+// transparent background. The bitmap buffer is copied because PDFium reuses
+// the underlying memory after the bitmap is destroyed.
 func renderTransparentPage(
 	instance pdfium.Pdfium,
 	document references.FPDF_DOCUMENT,
@@ -188,6 +201,7 @@ func renderTransparentPage(
 		return nil, err
 	}
 	defer instance.FPDFBitmap_Destroy(&requests.FPDFBitmap_Destroy{Bitmap: bitmap.Bitmap})
+	// Fill with transparent black before rendering so untouched pixels stay clear.
 	if _, err := instance.FPDFBitmap_FillRect(&requests.FPDFBitmap_FillRect{
 		Bitmap: bitmap.Bitmap, Width: size.Width, Height: size.Height, Color: 0x00000000,
 	}); err != nil {
@@ -219,6 +233,8 @@ func renderTransparentPage(
 	}, nil
 }
 
+// compositeOnWhite draws the rendered page over a white background so that
+// transparent areas of the PDF appear white in the output image.
 func compositeOnWhite(source image.Image) image.Image {
 	bounds := source.Bounds()
 	output := image.NewRGBA(image.Rect(0, 0, bounds.Dx(), bounds.Dy()))
@@ -227,6 +243,8 @@ func compositeOnWhite(source image.Image) image.Image {
 	return output
 }
 
+// saveImage encodes the image in the configured format and writes it to path.
+// The deferred close also reports errors that occur after a successful encode.
 func saveImage(path string, source image.Image, options RenderOptions) (returnErr error) {
 	output, err := os.Create(path)
 	if err != nil {

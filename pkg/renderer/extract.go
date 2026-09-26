@@ -13,6 +13,8 @@ func ExtractDocument(ctx context.Context, source string) (*ExtractResult, error)
 }
 
 // ExtractDocumentWithOptions extracts text using the supplied dependency options.
+// Each format is handled by a dedicated extractor; legacy binary formats are
+// converted to OOXML first.
 func ExtractDocumentWithOptions(ctx context.Context, source string, options *ExtractOptions) (*ExtractResult, error) {
 	extractOptions := DefaultExtractOptions()
 	if options != nil {
@@ -53,6 +55,8 @@ func ExtractDocumentWithOptions(ctx context.Context, source string, options *Ext
 	return &ExtractResult{Source: sourcePath, Parts: parts}, nil
 }
 
+// validateCharacterLimit enforces the configured maximum on the total number
+// of extracted characters. A limit of zero means no limit.
 func validateCharacterLimit(parts []TextPart, maxCharacters int) error {
 	if maxCharacters == 0 {
 		return nil
@@ -67,6 +71,8 @@ func validateCharacterLimit(parts []TextPart, maxCharacters int) error {
 	return nil
 }
 
+// extractLegacyOfficeText converts a legacy binary Office document to OOXML
+// and then reuses the corresponding OOXML extractor on the converted file.
 func extractLegacyOfficeText(ctx context.Context, source, extension string, options ExtractOptions) ([]TextPart, error) {
 	converted, cleanup, err := convertLegacyOfficeToOOXML(ctx, source, extension, libreOfficeConfig{
 		timeout: options.LibreOfficeTimeout, executable: options.LibreOfficeExecutable,

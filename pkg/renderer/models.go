@@ -16,6 +16,7 @@ const (
 )
 
 // RenderOptions controls page rasterization and LibreOffice execution.
+// The zero value is not usable; call DefaultRenderOptions and override fields.
 type RenderOptions struct {
 	DPI                   int
 	MaxPages              int
@@ -28,6 +29,7 @@ type RenderOptions struct {
 }
 
 // ExtractOptions controls dependencies used during text extraction.
+// The zero value is not usable; call DefaultExtractOptions and override fields.
 type ExtractOptions struct {
 	MaxCharacters         int
 	LibreOfficeTimeout    time.Duration
@@ -35,6 +37,7 @@ type ExtractOptions struct {
 }
 
 // DefaultExtractOptions returns the default extraction configuration.
+// MaxCharacters is zero, meaning no character limit.
 func DefaultExtractOptions() ExtractOptions {
 	return ExtractOptions{LibreOfficeTimeout: 120 * time.Second}
 }
@@ -51,6 +54,7 @@ func (options ExtractOptions) Validate() error {
 }
 
 // DefaultRenderOptions returns the default rendering configuration.
+// MaxPages is zero, meaning no page limit, and the background is opaque.
 func DefaultRenderOptions() RenderOptions {
 	return RenderOptions{
 		DPI:                300,
@@ -87,6 +91,7 @@ func (options RenderOptions) Validate() error {
 }
 
 // RenderedImage describes one rendered document page.
+// PageNumber is one-based and follows the document page order.
 type RenderedImage struct {
 	PageNumber int
 	Path       string
@@ -105,7 +110,8 @@ func (result RenderResult) PageCount() int {
 	return len(result.Images)
 }
 
-// TextPart contains text extracted from one document unit.
+// TextPart contains text extracted from one document unit. A unit is a page
+// for PDFs, a slide for presentations, or a worksheet for workbooks.
 type TextPart struct {
 	PartNumber int
 	Text       string
@@ -123,6 +129,7 @@ func (result ExtractResult) PartCount() int {
 }
 
 // Part returns the extracted text part with the requested one-based number.
+// The bool is false when no part has that number.
 func (result ExtractResult) Part(number int) (TextPart, bool) {
 	for _, part := range result.Parts {
 		if part.PartNumber == number {

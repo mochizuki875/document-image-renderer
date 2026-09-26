@@ -11,6 +11,10 @@ import (
 	"github.com/beevik/etree"
 )
 
+// prepareOfficeSource rewrites an OOXML document before conversion so that
+// LibreOffice produces predictable output. PPTX shapes with negative extents
+// are normalized and worksheets are forced to fit a single page. On any error
+// the original source is returned so conversion can still proceed.
 func prepareOfficeSource(source, extension, workingDirectory string) string {
 	var (
 		prepared string
@@ -30,8 +34,13 @@ func prepareOfficeSource(source, extension, workingDirectory string) string {
 	return prepared
 }
 
+// ooxmlTransform rewrites a single archive member. The bool reports whether
+// the member content changed so callers can detect a no-op rewrite.
 type ooxmlTransform func(name string, data []byte) ([]byte, bool, error)
 
+// rewriteOOXML copies an OOXML archive into workingDirectory, applying
+// transform to every member. When onlyWhenChanged is set and no member was
+// modified, the copy is discarded and the original source path is returned.
 func rewriteOOXML(
 	source string,
 	workingDirectory string,
@@ -50,6 +59,7 @@ func rewriteOOXML(
 		return "", err
 	}
 	writer := zip.NewWriter(output)
+	// fail cleans up the partially written archive before returning the error.
 	fail := func(err error) (string, error) {
 		_ = writer.Close()
 		_ = output.Close()
@@ -77,6 +87,7 @@ func rewriteOOXML(
 		}
 		changed = changed || memberChanged
 
+		// Preserve the original member metadata (name, timestamps, flags).
 		header := member.FileHeader
 		entry, err := writer.CreateHeader(&header)
 		if err != nil {
@@ -102,6 +113,9 @@ func rewriteOOXML(
 	return preparedPath, nil
 }
 
+// normalizePPTXPart fixes line shapes that carry a negative width or height.
+// LibreOffice renders such shapes incorrectly, so the offset is shifted by the
+// negative extent and the extent is made positive (mirroring the geometry).
 func normalizePPTXPart(name string, data []byte) ([]byte, bool, error) {
 	if !strings.HasPrefix(name, "ppt/slides/slide") || !strings.HasSuffix(name, ".xml") {
 		return data, false, nil
@@ -125,6 +139,8 @@ func normalizePPTXPart(name string, data []byte) ([]byte, bool, error) {
 		if offset == nil || extent == nil {
 			continue
 		}
+		// Handle the x and y axes independently: a negative extent on one axis
+		// means the shape extends in the opposite direction on that axis.
 		for _, axis := range []struct{ offset, extent string }{{"x", "cx"}, {"y", "cy"}} {
 			extentValue, err := strconv.ParseInt(extent.SelectAttrValue(axis.extent, "0"), 10, 64)
 			if err != nil {
@@ -149,6 +165,9 @@ func normalizePPTXPart(name string, data []byte) ([]byte, bool, error) {
 	return updated, true, err
 }
 
+// fitWorksheetPart configures a worksheet to fit on a single landscape page.
+// This keeps the rendered page count of a workbook predictable regardless of
+// the print settings stored in the file.
 func fitWorksheetPart(name string, data []byte) ([]byte, bool, error) {
 	if !strings.HasPrefix(name, "xl/worksheets/sheet") || !strings.HasSuffix(name, ".xml") {
 		return data, false, nil
@@ -158,6 +177,7 @@ func fitWorksheetPart(name string, data []byte) ([]byte, bool, error) {
 		return nil, false, err
 	}
 	root := document.Root()
+	// sheetPr/pageSetUpPr must exist for fitToPage to take effect.
 	sheetProperties := root.FindElement("./sheetPr")
 	if sheetProperties == nil {
 		sheetProperties = etree.NewElement("sheetPr")
@@ -169,6 +189,7 @@ func fitWorksheetPart(name string, data []byte) ([]byte, bool, error) {
 	}
 	pageSetupProperties.CreateAttr("fitToPage", "1")
 
+	// pageSetup must follow pageMargins to satisfy the OOXML schema order.
 	pageSetup := root.FindElement("./pageSetup")
 	if pageSetup == nil {
 		pageSetup = etree.NewElement("pageSetup")
@@ -179,6 +200,7 @@ func fitWorksheetPart(name string, data []byte) ([]byte, bool, error) {
 			root.InsertChildAt(pageMargins.Index()+1, pageSetup)
 		}
 	}
+	// Remove any explicit scale so fitToWidth/fitToHeight take precedence.
 	pageSetup.RemoveAttr("scale")
 	pageSetup.CreateAttr("orientation", "landscape")
 	pageSetup.CreateAttr("fitToWidth", "1")

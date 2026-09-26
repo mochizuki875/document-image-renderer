@@ -16,6 +16,7 @@ import (
 )
 
 // Run executes the command and returns its process exit code.
+// Exit codes: 0 success, 1 runtime error, 2 usage error.
 func Run(ctx context.Context, arguments []string, stdout, stderr io.Writer) int {
 	defaults := renderer.DefaultRenderOptions()
 	flags := flag.NewFlagSet("document-image-renderer", flag.ContinueOnError)
@@ -34,6 +35,7 @@ func Run(ctx context.Context, arguments []string, stdout, stderr io.Writer) int 
 		flags.PrintDefaults()
 	}
 
+	// Help is not an error; invalid flags and wrong argument counts are usage errors.
 	if err := flags.Parse(arguments); errors.Is(err, flag.ErrHelp) {
 		return 0
 	} else if err != nil {
@@ -78,6 +80,7 @@ func Run(ctx context.Context, arguments []string, stdout, stderr io.Writer) int 
 		fmt.Fprintf(stderr, "error: %v\n", err)
 		return 1
 	}
+	// Write one .txt file next to each rendered image, matching page numbers.
 	textPaths := make([]string, 0, len(result.Images))
 	for _, image := range result.Images {
 		text := ""
@@ -91,6 +94,7 @@ func Run(ctx context.Context, arguments []string, stdout, stderr io.Writer) int 
 		}
 		textPaths = append(textPaths, textPath)
 	}
+	// Print image and text paths in pairs, one page per line.
 	for index, image := range result.Images {
 		fmt.Fprintln(stdout, image.Path)
 		fmt.Fprintln(stdout, textPaths[index])

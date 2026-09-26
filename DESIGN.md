@@ -80,7 +80,9 @@ Using PDF as the intermediate representation fixes page dimensions, text, shapes
 
 ## Public API
 
-The primary API is used as follows:
+The public Go API is provided by `pkg/renderer`. It renders supported documents, extracts their text, and counts rendered pages. All entry points accept paths rather than streams; input paths and returned artifact paths are absolute.
+
+The primary rendering API is used as follows:
 
 ```go
 options := renderer.DefaultRenderOptions()
@@ -101,37 +103,121 @@ for _, image := range result.Images {
 }
 ```
 
-`RenderDocument` resolves both the input path and output directory to absolute paths. A `nil` `RenderOptions` pointer selects the defaults. A partially initialized options struct is not merged with the defaults, so callers that override individual fields should modify the value returned by `DefaultRenderOptions`.
+Use `DefaultRenderOptions` or `DefaultExtractOptions` before overriding individual fields. Passing `nil` selects the corresponding defaults. A non-`nil` options value is validated as supplied and is not merged with defaults.
 
-`SupportedExtensions` returns the supported lowercase extensions in lexical order. Extension matching during rendering is case-insensitive.
+## API Reference
 
-`ExtractDocument` applies the same input validation and extension matching. It returns ordered `TextPart` values without writing files. PDF parts correspond to pages, PPT/PPTX parts to slides, and XLS/XLSX/XLSM parts to worksheets. DOC and DOCX return the document body as one part because the converted OOXML does not define rendered page boundaries. Legacy binary Office formats are converted to temporary OOXML files with LibreOffice before the same extractors are used.
+### Supported formats
 
-`ExtractDocumentWithOptions` accepts `ExtractOptions` for the LibreOffice timeout and executable used by legacy Office conversion. `ExtractDocument` is the convenience form that uses `DefaultExtractOptions`.
+`SupportedExtensions() []string` returns the accepted lowercase extensions in lexical order: `.doc`, `.docx`, `.pdf`, `.ppt`, `.pptx`, `.xls`, `.xlsm`, and `.xlsx`. All document entry points match extensions case-insensitively.
+
+### Render document
+
+```go
+func RenderDocument(ctx context.Context, source, outputDirectory string, options *RenderOptions) (*RenderResult, error)
+```
+
+`RenderDocument` creates `outputDirectory` when needed and renders each page of the source document in order. `RenderResult.Source` is the absolute input path; every `RenderedImage.Path` is an absolute output path. For Office input, LibreOffice produces a temporary PDF before rendering. The function returns no result on failure, but images written before a later failure remain in the output directory.
+
+### Page count
+```go
+func PageCount(ctx context.Context, source string) (int, error)
+func PageCountWithOptions(ctx context.Context, source string, options *ExtractOptions) (int, error)
+```
+
+`PageCount` returns the number of pages that `RenderDocument` would render without writing images. For Office input it converts to a temporary PDF. `PageCountWithOptions` controls the LibreOffice executable and timeout used for that conversion; `PageCount` uses `DefaultExtractOptions`.
+
+### Text extraction
+
+```go
+func ExtractDocument(ctx context.Context, source string) (*ExtractResult, error)
+func ExtractDocumentWithOptions(ctx context.Context, source string, options *ExtractOptions) (*ExtractResult, error)
+```
+
+These functions extract ordered text without writing files. PDF parts correspond to pages, PPT/PPTX parts to slides, and XLS/XLSX/XLSM parts to worksheets. DOC and DOCX return the document body as one part because OOXML does not define rendered page boundaries. Legacy DOC, PPT, and XLS files are converted to temporary OOXML with LibreOffice before extraction. `ExtractDocument` uses `DefaultExtractOptions`.
 
 ### Options
 
-| Field | Default | Constraint and meaning |
+```go
+func DefaultRenderOptions() RenderOptions
+func (RenderOptions) Validate() error
+func DefaultExtractOptions() ExtractOptions
+func (ExtractOptions) Validate() error
+```
+
+| `RenderOptions` field | Default | Constraint and meaning |
 |---|---:|---|
 | `DPI` | `300` | Rendering resolution from 1 through 1200 DPI |
-| `ImageFormat` | `png` | `ImageFormatPNG` or `ImageFormatJPEG` |
+| `MaxPages` | `0` | Maximum pages to render; `0` permits unlimited pages |
+| `ImageFormat` | `ImageFormatPNG` | PNG or JPEG output encoding |
 | `JPEGQuality` | `90` | Value from 1 through 100; validated even for PNG output |
-| `TransparentBackground` | `false` | Preserve the PDF page background alpha in PNG output |
-| `FilenamePrefix` | Source basename without its extension | A single filename component with no path separator |
-| `LibreOfficeTimeout` | `120s` | Positive timeout for one Office conversion |
+| `TransparentBackground` | `false` | Preserve PDF page alpha for PNG output |
+| `FilenamePrefix` | Source basename without extension | Empty selects the source stem; a non-empty value must be one filename component |
+| `LibreOfficeTimeout` | `120s` | Timeout for one Office conversion; `0` permits no timeout |
 | `LibreOfficeExecutable` | Auto-detected | Explicit LibreOffice executable when provided |
 
-JPEG has no alpha channel, so combining JPEG with `TransparentBackground=true` is a validation error.
+`ImageFormat` is a string type with the only valid values `ImageFormatPNG` (`"png"`) and `ImageFormatJPEG` (`"jpeg"`).
 
-`ExtractOptions` contains `LibreOfficeTimeout` and `LibreOfficeExecutable`. Its defaults match the corresponding rendering defaults. Modern OOXML extraction does not invoke LibreOffice, but options are validated consistently before routing.
+JPEG has no alpha channel, so combining `ImageFormatJPEG` with `TransparentBackground=true` is invalid.
 
-### Result model
+| `ExtractOptions` field | Default | Constraint and meaning |
+|---|---:|---|
+| `MaxCharacters` | `0` | Maximum Unicode characters across all extracted parts; `0` permits unlimited text |
+| `LibreOfficeTimeout` | `120s` | Timeout for a legacy Office conversion; `0` permits no timeout |
+| `LibreOfficeExecutable` | Auto-detected | Explicit LibreOffice executable when provided |
 
-`RenderResult.Source` contains the absolute input path. `RenderResult.Images` contains `RenderedImage` values in PDF page order. `PageCount` returns `len(Images)`.
+. Modern OOXML extraction does not invoke LibreOffice, though options are validated before routing.
 
-Each `RenderedImage` contains a one-based page number, the absolute output image path, and the width and height of the encoded image.
+### Results
 
-`ExtractResult.Source` contains the absolute input path. `ExtractResult.Parts` contains one-based `TextPart` values in source order. `PartCount` returns `len(Parts)`, `Part` looks up a one-based part number, and `Text` joins parts with one blank line.
+```go
+type RenderedImage struct {
+  PageNumber int
+  Path       string
+  Width      int
+  Height     int
+}
+
+type RenderResult struct {
+  Source string
+  Images []RenderedImage
+}
+
+func (RenderResult) PageCount() int
+
+type TextPart struct {
+  PartNumber int
+  Text       string
+}
+
+type ExtractResult struct {
+  Source string
+  Parts  []TextPart
+}
+
+func (ExtractResult) PartCount() int
+func (ExtractResult) Part(number int) (TextPart, bool)
+func (ExtractResult) Text() string
+```
+
+`RenderedImage` values are in PDF page order and have one-based `PageNumber` values. `RenderResult.PageCount` returns `len(Images)`. `TextPart` values are in source order and have one-based `PartNumber` values. `ExtractResult.Part` returns the part with the requested number; `Text` joins all parts with one blank line.
+
+### Errors
+
+Callers can use `errors.As` for the following public error types:
+
+| Error type | Condition |
+|---|---|
+| `UnsupportedFormatError` | Unsupported input extension |
+| `DependencyNotFoundError` | LibreOffice cannot be resolved for an operation that requires it |
+| `PageLimitExceededError` | The document page count exceeds `RenderOptions.MaxPages` |
+| `CharacterLimitExceededError` | Extracted text exceeds `ExtractOptions.MaxCharacters` |
+| `DocumentConversionError` | Office conversion or temporary conversion setup fails; includes `Path`, `Stdout`, `Stderr`, and an unwrapped cause |
+| `DocumentPageCountError` | PDF page counting fails; includes `Path` and an unwrapped cause |
+| `DocumentRenderError` | PDF rasterization or image writing fails; includes `Path` and an unwrapped cause |
+| `DocumentExtractionError` | Text extraction or text-limit validation fails; includes `Path` and an unwrapped cause |
+
+Invalid options, a `nil` context, invalid input paths, and output-directory creation failures are ordinary errors with operation context rather than the public document-processing error types.
 
 ## Input Validation and Routing
 
@@ -228,11 +314,14 @@ Public error types correspond to processing boundaries so callers can distinguis
 |---|---|---|
 | `UnsupportedFormatError` | The input extension is unsupported | Extension and absolute input path |
 | `DependencyNotFoundError` | LibreOffice cannot be resolved for Office input | Dependency name and required operation |
+| `PageLimitExceededError` | The rendered page count exceeds `RenderOptions.MaxPages` | Actual page count and configured limit |
+| `CharacterLimitExceededError` | Extracted text exceeds `ExtractOptions.MaxCharacters` | Actual Unicode character count and configured limit |
 | `DocumentConversionError` | Temporary workspace setup, LibreOffice execution, timeout, or missing conversion output fails | Input path, underlying cause, and LibreOffice standard output and standard error |
+| `DocumentPageCountError` | PDF page counting fails | Input path and underlying cause |
 | `DocumentRenderError` | PDF reading, PDFium initialization, document opening, page rendering, image saving, or cancellation during rendering fails | PDF path, operation including the page number when applicable, and underlying cause |
-| `DocumentExtractionError` | PDF, OOXML, or workbook text extraction fails | Input path and underlying cause |
+| `DocumentExtractionError` | PDF, OOXML, or workbook text extraction, including character-limit validation, fails | Input path and underlying cause |
 
-`DocumentConversionError`, `DocumentRenderError`, and `DocumentExtractionError` implement `Unwrap`. Invalid options, a `nil` context, a missing input, a non-regular input, path resolution failures, and output directory creation failures are returned as ordinary errors with operation context rather than being wrapped in these public types.
+`DocumentConversionError`, `DocumentPageCountError`, `DocumentRenderError`, and `DocumentExtractionError` implement `Unwrap`. Invalid options, a `nil` context, a missing input, a non-regular input, path resolution failures, and output directory creation failures are returned as ordinary errors with operation context rather than being wrapped in these public types.
 
 For Office input, a rendering error references the temporary PDF path. `RenderResult.Source` always references the original absolute input path.
 
@@ -244,7 +333,7 @@ Each call owns an independent LibreOffice profile and PDFium pool, so separate c
 
 The complete PDF byte stream is held in memory. During rendering, at least the PDFium-side and Go-side page bitmaps are also present; opaque rendering additionally allocates the white compositing image. An RGBA bitmap requires approximately four bytes per pixel. PDFium WebAssembly uses 32-bit linear memory, so high DPI values or very large pages can reach its memory limit.
 
-The library does not pre-limit page count, expanded document size, total pixel count, or total output size. Services that process untrusted documents must enforce process-level CPU, memory, file-size, storage, and concurrency limits in addition to context deadlines.
+The library does not impose default limits on page count, expanded document size, total pixel count, or total output size. Callers can set `RenderOptions.MaxPages`; services that process untrusted documents must also enforce process-level CPU, memory, file-size, storage, and concurrency limits in addition to context deadlines.
 
 ## Security
 

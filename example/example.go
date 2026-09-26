@@ -20,6 +20,7 @@ func main() {
 	options.ImageFormat = renderer.ImageFormatPNG
 	options.MaxPages = 3
 
+	// Render the first three pages of the sample document to images.
 	result, err := renderer.RenderDocument(
 		ctx,
 		source,
@@ -31,6 +32,7 @@ func main() {
 	}
 	fmt.Printf("rendered %d pages\n", result.PageCount())
 
+	// Extract the matching page text and save it next to each image.
 	extracted, err := renderer.ExtractDocument(ctx, source)
 	if err != nil {
 		log.Fatal(err)

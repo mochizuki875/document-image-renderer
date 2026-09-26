@@ -13,8 +13,12 @@ import (
 	"time"
 )
 
+// calcSinglePageFilter tells LibreOffice to export each spreadsheet sheet as a
+// single page, which keeps the rendered page count of a workbook predictable.
 const calcSinglePageFilter = `pdf:calc_pdf_Export:{"SinglePageSheets":{"type":"boolean","value":"true"}}`
 
+// libreOfficeProfile disables macro security prompts in the temporary user
+// profile so headless conversion never blocks on a dialog.
 const libreOfficeProfile = `<?xml version="1.0" encoding="UTF-8"?>
 <oor:items xmlns:oor="http://openoffice.org/2001/registry">
     <item oor:path="/org.openoffice.Office.Common/Security/Scripting">
@@ -40,6 +44,9 @@ type libreOfficeConfig struct {
 	executable string
 }
 
+// convertOfficeToPDF converts an Office document to PDF for rendering or page
+// counting. It returns the PDF path and a cleanup function for the temporary
+// conversion directory.
 func convertOfficeToPDF(
 	ctx context.Context,
 	source string,
@@ -51,6 +58,8 @@ func convertOfficeToPDF(
 	}, libreOfficeConfig{timeout: options.LibreOfficeTimeout, executable: options.LibreOfficeExecutable})
 }
 
+// pdfConversionFilter selects the LibreOffice export filter for the format.
+// Spreadsheets use a filter that exports one page per sheet.
 func pdfConversionFilter(extension string) string {
 	switch extension {
 	case ".xls", ".xlsx", ".xlsm":
@@ -60,6 +69,9 @@ func pdfConversionFilter(extension string) string {
 	}
 }
 
+// convertLegacyOfficeToOOXML converts a legacy binary Office document (.doc,
+// .ppt, .xls) to its OOXML equivalent so text can be extracted without a
+// dedicated legacy parser.
 func convertLegacyOfficeToOOXML(
 	ctx context.Context,
 	source string,
@@ -86,6 +98,10 @@ type officeConversion struct {
 	prepareSource   bool
 }
 
+// convertOffice runs a headless LibreOffice conversion in a temporary
+// directory and returns the converted file path together with a cleanup
+// function. The temporary profile prevents interference with the user's
+// regular LibreOffice configuration.
 func convertOffice(
 	ctx context.Context,
 	source string,
@@ -95,6 +111,7 @@ func convertOffice(
 ) (string, func(), error) {
 	executable := config.executable
 	if executable == "" {
+		// Fall back to the common executable names when none was configured.
 		for _, candidate := range []string{"libreoffice", "soffice"} {
 			found, err := findExecutable(candidate)
 			if err == nil {
@@ -115,6 +132,7 @@ func convertOffice(
 		return "", func() {}, &DocumentConversionError{Path: source, Err: err}
 	}
 	cleanup := func() { _ = os.RemoveAll(workingDirectory) }
+	// fail wraps the error with the captured output and removes the temp dir.
 	fail := func(err error, stdout, stderr string) (string, func(), error) {
 		cleanup()
 		return "", func() {}, &DocumentConversionError{
@@ -131,6 +149,7 @@ func convertOffice(
 		return fail(err, "", "")
 	}
 
+	// Some formats need a rewritten copy before conversion (see prepareOfficeSource).
 	conversionSource := source
 	if conversion.prepareSource {
 		conversionSource = prepareOfficeSource(source, extension, workingDirectory)
@@ -164,6 +183,7 @@ func convertOffice(
 		return fail(commandErr, stdout, stderr)
 	}
 
+	// LibreOffice names the output after the input file with the new extension.
 	outputName := strings.TrimSuffix(filepath.Base(source), filepath.Ext(source)) + conversion.targetExtension
 	outputPath := filepath.Join(outputDirectory, outputName)
 	if info, err := os.Stat(outputPath); err != nil || !info.Mode().IsRegular() {
@@ -172,6 +192,8 @@ func convertOffice(
 	return outputPath, cleanup, nil
 }
 
+// configureLibreOfficeProfile writes a minimal user profile so LibreOffice
+// runs with the desired settings without touching the user's own profile.
 func configureLibreOfficeProfile(profileDirectory string) error {
 	userDirectory := filepath.Join(profileDirectory, "user")
 	if err := os.MkdirAll(userDirectory, 0o700); err != nil {

@@ -7,6 +7,9 @@ import (
 	"github.com/xuri/excelize/v2"
 )
 
+// extractWorkbookText extracts the content of every worksheet from an XLSX or
+// XLSM workbook. Each sheet becomes one TextPart whose text is a lightweight
+// markup of rows separated by tabs.
 func extractWorkbookText(source string) ([]TextPart, error) {
 	workbook, err := excelize.OpenFile(source, excelize.Options{Password: ""})
 	if err != nil {
@@ -19,6 +22,7 @@ func extractWorkbookText(source string) ([]TextPart, error) {
 		if err != nil {
 			return nil, err
 		}
+		// Wrap the sheet content in tags so the sheet name is preserved.
 		lines := make([]string, 0, len(rows)+2)
 		lines = append(lines, `<sheet name=`+strconv.Quote(sheet)+`>`)
 		for _, row := range rows {
