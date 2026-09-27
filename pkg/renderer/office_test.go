@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestConvertOfficeUsesIsolatedProfile(t *testing.T) {
@@ -83,6 +84,7 @@ func TestConvertOfficeAllowsUnlimitedTimeout(t *testing.T) {
 	}
 
 	options := DefaultRenderOptions()
+	options.RenderTimeout = 0
 	options.LibreOfficeTimeout = 0
 	result, err := RenderDocument(context.Background(), source, t.TempDir(), &options)
 	if err != nil {
@@ -137,6 +139,151 @@ func TestConversionErrorRetainsDiagnostics(t *testing.T) {
 	if conversionError.Stdout != "output" || conversionError.Stderr != "failure" {
 		t.Fatalf("diagnostics were not retained: %+v", conversionError)
 	}
+}
+
+func TestConvertOfficeReportsLibreOfficeTimeout(t *testing.T) {
+	source := filepath.Join(t.TempDir(), "input.ppt")
+	if err := os.WriteFile(source, []byte("placeholder"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	replaceLibreOfficeFunctions(t)
+	findExecutable = func(string) (string, error) { return "libreoffice", nil }
+	executeLibreOffice = func(ctx context.Context, _ string, _ []string) (string, string, error) {
+		<-ctx.Done()
+		return "", "", ctx.Err()
+	}
+
+	options := DefaultRenderOptions()
+	options.LibreOfficeTimeout = 10 * time.Millisecond
+	_, err := RenderDocument(context.Background(), source, t.TempDir(), &options)
+	var conversionError *DocumentConversionError
+	if !errors.As(err, &conversionError) {
+		t.Fatalf("expected DocumentConversionError, got %v", err)
+	}
+	if !strings.Contains(conversionError.Error(), "timed out") {
+		t.Fatalf("expected timeout message, got %v", conversionError)
+	}
+}
+
+func TestConvertOfficeReportsMissingOutput(t *testing.T) {
+	source := filepath.Join(t.TempDir(), "input.ppt")
+	if err := os.WriteFile(source, []byte("placeholder"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	replaceLibreOfficeFunctions(t)
+	findExecutable = func(string) (string, error) { return "libreoffice", nil }
+	executeLibreOffice = func(context.Context, string, []string) (string, string, error) {
+		return "", "", nil
+	}
+
+	_, err := RenderDocument(context.Background(), source, t.TempDir(), nil)
+	var conversionError *DocumentConversionError
+	if !errors.As(err, &conversionError) {
+		t.Fatalf("expected DocumentConversionError, got %v", err)
+	}
+	if !strings.Contains(conversionError.Error(), "did not produce") {
+		t.Fatalf("expected missing output message, got %v", conversionError)
+	}
+}
+
+func TestConvertOfficeFallsBackToSoffice(t *testing.T) {
+	source := filepath.Join(t.TempDir(), "input.docx")
+	copyFixture(t, fixturePath("samplefile.docx"), source)
+	replaceLibreOfficeFunctions(t)
+	findExecutable = func(candidate string) (string, error) {
+		if candidate == "libreoffice" {
+			return "", errors.New("not found")
+		}
+		if candidate == "soffice" {
+			return "/usr/bin/soffice", nil
+		}
+		return "", errors.New("not found")
+	}
+	executeLibreOffice = func(_ context.Context, executable string, arguments []string) (string, string, error) {
+		if executable != "/usr/bin/soffice" {
+			t.Fatalf("unexpected executable: %s", executable)
+		}
+		outputDirectory := argumentAfter(t, arguments, "--outdir")
+		copyFixture(t, fixturePath("samplefile.pdf"), filepath.Join(outputDirectory, "input.pdf"))
+		return "", "", nil
+	}
+
+	result, err := RenderDocument(context.Background(), source, t.TempDir(), nil)
+	if err != nil {
+		t.Fatalf("render Office document: %v", err)
+	}
+	if result.PageCount() == 0 {
+		t.Fatal("expected at least one rendered page")
+	}
+}
+
+func TestConvertOfficeUsesConfiguredExecutableWithoutLookup(t *testing.T) {
+	source := filepath.Join(t.TempDir(), "input.docx")
+	copyFixture(t, fixturePath("samplefile.docx"), source)
+	replaceLibreOfficeFunctions(t)
+	findExecutable = func(string) (string, error) {
+		t.Fatal("findExecutable must not be called when an executable is configured")
+		return "", nil
+	}
+	executeLibreOffice = func(_ context.Context, executable string, arguments []string) (string, string, error) {
+		if executable != "/custom/libreoffice" {
+			t.Fatalf("unexpected executable: %s", executable)
+		}
+		outputDirectory := argumentAfter(t, arguments, "--outdir")
+		copyFixture(t, fixturePath("samplefile.pdf"), filepath.Join(outputDirectory, "input.pdf"))
+		return "", "", nil
+	}
+
+	options := DefaultRenderOptions()
+	options.LibreOfficeExecutable = "/custom/libreoffice"
+	result, err := RenderDocument(context.Background(), source, t.TempDir(), &options)
+	if err != nil {
+		t.Fatalf("render Office document: %v", err)
+	}
+	if result.PageCount() == 0 {
+		t.Fatal("expected at least one rendered page")
+	}
+}
+
+func TestConvertLegacyOfficeToOOXMLRejectsUnsupportedFormat(t *testing.T) {
+	_, _, err := convertLegacyOfficeToOOXML(context.Background(), "input.xyz", ".xyz", libreOfficeConfig{})
+	if err == nil || !strings.Contains(err.Error(), "unsupported legacy Office format") {
+		t.Fatalf("expected unsupported format error, got %v", err)
+	}
+}
+
+func TestConvertOfficePassesHeadlessArguments(t *testing.T) {
+	source := filepath.Join(t.TempDir(), "input.xlsx")
+	copyFixture(t, fixturePath("samplefile.xlsx"), source)
+	replaceLibreOfficeFunctions(t)
+	findExecutable = func(string) (string, error) { return "libreoffice", nil }
+	executeLibreOffice = func(_ context.Context, _ string, arguments []string) (string, string, error) {
+		for _, expected := range []string{"--headless", "--nologo", "--nodefault", "--nolockcheck", "--nofirststartwizard"} {
+			if !containsArgument(arguments, expected) {
+				t.Fatalf("missing argument %s in %v", expected, arguments)
+			}
+		}
+		outputDirectory := argumentAfter(t, arguments, "--outdir")
+		copyFixture(t, fixturePath("samplefile.pdf"), filepath.Join(outputDirectory, "input.pdf"))
+		return "", "", nil
+	}
+
+	result, err := RenderDocument(context.Background(), source, t.TempDir(), nil)
+	if err != nil {
+		t.Fatalf("render Office document: %v", err)
+	}
+	if result.PageCount() == 0 {
+		t.Fatal("expected at least one rendered page")
+	}
+}
+
+func containsArgument(arguments []string, target string) bool {
+	for _, argument := range arguments {
+		if argument == target {
+			return true
+		}
+	}
+	return false
 }
 
 func replaceLibreOfficeFunctions(t *testing.T) {

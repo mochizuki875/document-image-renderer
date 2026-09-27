@@ -15,10 +15,11 @@ const (
 	ImageFormatJPEG ImageFormat = "jpeg"
 )
 
-// RenderOptions controls page rasterization and LibreOffice execution.
+// RenderOptions controls rendering limits, page rasterization, and LibreOffice execution.
 // The zero value is not usable; call DefaultRenderOptions and override fields.
 type RenderOptions struct {
 	DPI                   int
+	RenderTimeout         time.Duration
 	MaxPages              int
 	MaxPDFBytes           uint64
 	MaxPageWidth          int
@@ -36,7 +37,7 @@ type RenderOptions struct {
 	LibreOfficeExecutable string
 }
 
-// ExtractOptions controls dependencies used during text extraction.
+// ExtractOptions controls extraction limits and dependencies.
 // The zero value is not usable; call DefaultExtractOptions and override fields.
 type ExtractOptions struct {
 	MaxCharacters         int
@@ -79,6 +80,7 @@ func (options ExtractOptions) Validate() error {
 func DefaultRenderOptions() RenderOptions {
 	return RenderOptions{
 		DPI:                 300,
+		RenderTimeout:       120 * time.Second,
 		MaxPDFBytes:         128 << 20,
 		MaxPageWidth:        20_000,
 		MaxPageHeight:       20_000,
@@ -88,7 +90,7 @@ func DefaultRenderOptions() RenderOptions {
 		MaxOOXMLMemberBytes: 256 << 20,
 		MaxOOXMLTotalBytes:  1 << 30,
 		ImageFormat:         ImageFormatPNG,
-		JPEGQuality:         90,
+		JPEGQuality:         100,
 		LibreOfficeTimeout:  120 * time.Second,
 	}
 }
@@ -97,6 +99,9 @@ func DefaultRenderOptions() RenderOptions {
 func (options RenderOptions) Validate() error {
 	if options.DPI < 1 || options.DPI > 1200 {
 		return fmt.Errorf("dpi must be between 1 and 1200")
+	}
+	if options.RenderTimeout < 0 {
+		return fmt.Errorf("render timeout must not be negative")
 	}
 	if options.MaxPages < 0 {
 		return fmt.Errorf("max pages must not be negative")

@@ -36,6 +36,7 @@ func Run(ctx context.Context, arguments []string, stdout, stderr io.Writer) int 
 	imageFormat := flags.String("format", string(defaults.ImageFormat), "output format: png or jpeg")
 	jpegQuality := flags.Int("jpeg-quality", defaults.JPEGQuality, "JPEG quality from 1 to 100")
 	prefix := flags.String("prefix", "", "output file name prefix")
+	renderTimeout := flags.Float64("render-timeout", defaults.RenderTimeout.Seconds(), "render timeout in seconds (0 for unlimited)")
 	timeout := flags.Float64("timeout", defaults.LibreOfficeTimeout.Seconds(), "LibreOffice timeout in seconds")
 	transparent := flags.Bool("transparent", false, "use a transparent PNG background")
 	libreOffice := flags.String("libreoffice", "", "path to the LibreOffice executable")
@@ -70,6 +71,7 @@ func Run(ctx context.Context, arguments []string, stdout, stderr io.Writer) int 
 	options.JPEGQuality = *jpegQuality
 	options.TransparentBackground = *transparent
 	options.FilenamePrefix = *prefix
+	options.RenderTimeout = time.Duration(*renderTimeout * float64(time.Second))
 	options.LibreOfficeTimeout = time.Duration(*timeout * float64(time.Second))
 	options.LibreOfficeExecutable = *libreOffice
 	extractOptions := extractDefaults

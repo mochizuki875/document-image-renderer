@@ -83,6 +83,17 @@ func TestRunRejectsNegativeMaxCharacters(t *testing.T) {
 	}
 }
 
+func TestRunRejectsNegativeRenderTimeout(t *testing.T) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	if exitCode := Run(context.Background(), []string{"--render-timeout", "-1", "input.pdf", t.TempDir()}, &stdout, &stderr); exitCode != 1 {
+		t.Fatalf("unexpected exit code: %d", exitCode)
+	}
+	if !strings.Contains(stderr.String(), "render timeout must not be negative") {
+		t.Fatalf("unexpected error: %s", stderr.String())
+	}
+}
+
 func TestRunRequiresSourceAndOutput(t *testing.T) {
 	var output bytes.Buffer
 	if exitCode := Run(context.Background(), nil, &output, &output); exitCode != 2 {
@@ -100,5 +111,107 @@ func TestRunHelpSucceeds(t *testing.T) {
 	}
 	if !strings.Contains(output.String(), "Usage:") {
 		t.Fatalf("usage was not printed: %s", output.String())
+	}
+}
+
+func TestRunRejectsUnknownFlag(t *testing.T) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	if exitCode := Run(context.Background(), []string{"--unknown", "input.pdf", t.TempDir()}, &stdout, &stderr); exitCode != 2 {
+		t.Fatalf("unexpected exit code: %d", exitCode)
+	}
+}
+
+func TestRunRejectsInvalidFormat(t *testing.T) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	if exitCode := Run(context.Background(), []string{"--format", "gif", "input.pdf", t.TempDir()}, &stdout, &stderr); exitCode != 1 {
+		t.Fatalf("unexpected exit code: %d", exitCode)
+	}
+	if !strings.Contains(stderr.String(), "image format") {
+		t.Fatalf("unexpected error: %s", stderr.String())
+	}
+}
+
+func TestRunRejectsInvalidJPEGQuality(t *testing.T) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	if exitCode := Run(context.Background(), []string{"--jpeg-quality", "101", "input.pdf", t.TempDir()}, &stdout, &stderr); exitCode != 1 {
+		t.Fatalf("unexpected exit code: %d", exitCode)
+	}
+	if !strings.Contains(stderr.String(), "jpeg quality") {
+		t.Fatalf("unexpected error: %s", stderr.String())
+	}
+}
+
+func TestRunRejectsTransparentJPEG(t *testing.T) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	if exitCode := Run(context.Background(), []string{"--format", "jpeg", "--transparent", "input.pdf", t.TempDir()}, &stdout, &stderr); exitCode != 1 {
+		t.Fatalf("unexpected exit code: %d", exitCode)
+	}
+	if !strings.Contains(stderr.String(), "transparent") {
+		t.Fatalf("unexpected error: %s", stderr.String())
+	}
+}
+
+func TestRunRejectsTraversalPrefix(t *testing.T) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	if exitCode := Run(context.Background(), []string{"--prefix", "../outside", "input.pdf", t.TempDir()}, &stdout, &stderr); exitCode != 1 {
+		t.Fatalf("unexpected exit code: %d", exitCode)
+	}
+	if !strings.Contains(stderr.String(), "filename prefix") {
+		t.Fatalf("unexpected error: %s", stderr.String())
+	}
+}
+
+func TestRunRejectsNegativeTimeout(t *testing.T) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	if exitCode := Run(context.Background(), []string{"--timeout", "-1", "input.pdf", t.TempDir()}, &stdout, &stderr); exitCode != 1 {
+		t.Fatalf("unexpected exit code: %d", exitCode)
+	}
+	if !strings.Contains(stderr.String(), "libreoffice timeout") {
+		t.Fatalf("unexpected error: %s", stderr.String())
+	}
+}
+
+func TestRunRejectsMissingSourceFile(t *testing.T) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	if exitCode := Run(context.Background(), []string{filepath.Join(t.TempDir(), "missing.pdf"), t.TempDir()}, &stdout, &stderr); exitCode != 1 {
+		t.Fatalf("unexpected exit code: %d", exitCode)
+	}
+	if !strings.Contains(stderr.String(), "does not exist") {
+		t.Fatalf("unexpected error: %s", stderr.String())
+	}
+}
+
+func TestRunRejectsUnsupportedExtension(t *testing.T) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	source := filepath.Join(t.TempDir(), "input.txt")
+	if err := os.WriteFile(source, []byte("data"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if exitCode := Run(context.Background(), []string{source, t.TempDir()}, &stdout, &stderr); exitCode != 1 {
+		t.Fatalf("unexpected exit code: %d", exitCode)
+	}
+	if !strings.Contains(stderr.String(), "unsupported document format") {
+		t.Fatalf("unexpected error: %s", stderr.String())
+	}
+}
+
+func TestRunUsesConfiguredLibreOffice(t *testing.T) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	outputDirectory := t.TempDir()
+	source := filepath.Join("..", "..", "test", "documents", "samplefile.pdf")
+	if exitCode := Run(context.Background(), []string{"--libreoffice", "/custom/libreoffice", source, outputDirectory}, &stdout, &stderr); exitCode != 0 {
+		t.Fatalf("unexpected exit code %d: %s", exitCode, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "samplefile-page-") {
+		t.Fatalf("unexpected output: %s", stdout.String())
 	}
 }

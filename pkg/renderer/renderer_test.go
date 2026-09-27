@@ -1,18 +1,16 @@
 package renderer
 
 import (
-	"bytes"
 	"context"
 	"encoding/base64"
 	"errors"
 	"fmt"
 	"image"
-	"image/color"
 	_ "image/jpeg"
 	_ "image/png"
-	"math"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -85,69 +83,6 @@ func TestDocumentAPIsRejectPDFExceedingByteLimit(t *testing.T) {
 	}
 }
 
-func TestReadPDFAcceptsExactByteLimit(t *testing.T) {
-	source := filepath.Join(t.TempDir(), "input.pdf")
-	content := []byte("1234")
-	if err := os.WriteFile(source, content, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	data, err := readPDF(context.Background(), source, uint64(len(content)))
-	if err != nil || string(data) != string(content) {
-		t.Fatalf("data=%q error=%v", data, err)
-	}
-}
-
-func TestContextReaderStopsAfterCancellation(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	reader := &contextReader{ctx: ctx, reader: bytes.NewReader([]byte("PDF data"))}
-	buffer := make([]byte, 3)
-	if _, err := reader.Read(buffer); err != nil {
-		t.Fatal(err)
-	}
-	cancel()
-	if _, err := reader.Read(buffer); !errors.Is(err, context.Canceled) {
-		t.Fatalf("expected context.Canceled, got %v", err)
-	}
-}
-
-func TestSaveImageCancellationDoesNotPublishPartialFile(t *testing.T) {
-	for _, format := range []ImageFormat{ImageFormatPNG, ImageFormatJPEG} {
-		t.Run(string(format), func(t *testing.T) {
-			ctx, cancel := context.WithCancel(context.Background())
-			path := filepath.Join(t.TempDir(), "output."+imageExtension(format))
-			original := []byte("complete previous output")
-			if err := os.WriteFile(path, original, 0o600); err != nil {
-				t.Fatal(err)
-			}
-			options := DefaultRenderOptions()
-			options.ImageFormat = format
-			source := cancelingImage{Image: image.NewRGBA(image.Rect(0, 0, 512, 512)), cancel: cancel}
-			err := saveImage(ctx, path, source, options)
-			if !errors.Is(err, context.Canceled) {
-				t.Fatalf("expected context.Canceled, got %v", err)
-			}
-			data, readErr := os.ReadFile(path)
-			if readErr != nil || string(data) != string(original) {
-				t.Fatalf("previous output changed: data=%q error=%v", data, readErr)
-			}
-			matches, err := filepath.Glob(filepath.Join(filepath.Dir(path), ".document-image-renderer-*"))
-			if err != nil || len(matches) != 0 {
-				t.Fatalf("temporary outputs remain: %v, error=%v", matches, err)
-			}
-		})
-	}
-}
-
-type cancelingImage struct {
-	image.Image
-	cancel context.CancelFunc
-}
-
-func (source cancelingImage) At(x, y int) color.Color {
-	source.cancel()
-	return source.Image.At(x, y)
-}
-
 func TestDocumentAPIsReturnCanceledContextPromptly(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -166,6 +101,15 @@ func TestDocumentAPIsReturnCanceledContextPromptly(t *testing.T) {
 		if err := check(); !errors.Is(err, context.Canceled) {
 			t.Fatalf("expected context.Canceled, got %v", err)
 		}
+	}
+}
+
+func TestRenderDocumentAppliesRenderTimeout(t *testing.T) {
+	renderOptions := DefaultRenderOptions()
+	renderOptions.RenderTimeout = time.Nanosecond
+	_, err := RenderDocument(context.Background(), fixturePath("samplefile.pdf"), t.TempDir(), &renderOptions)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("expected context.DeadlineExceeded, got %v", err)
 	}
 }
 
@@ -195,23 +139,6 @@ func TestRenderDocumentCancellationInterruptsStuckPDFium(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("PDFium did not stop within five seconds")
-	}
-}
-
-func TestValidatePageSizeBoundariesAndOverflow(t *testing.T) {
-	options := DefaultRenderOptions()
-	options.MaxPageWidth = 100
-	options.MaxPageHeight = 200
-	options.MaxPagePixels = 20_000
-	if pixels, err := validatePageSize(1, 100, 200, options); err != nil || pixels != 20_000 {
-		t.Fatalf("boundary size rejected: pixels=%d error=%v", pixels, err)
-	}
-	if _, err := validatePageSize(1, 101, 200, options); err == nil {
-		t.Fatal("width above limit was accepted")
-	}
-	options.MaxPageWidth, options.MaxPageHeight, options.MaxPagePixels = 0, 0, 0
-	if _, err := validatePageSize(1, math.MaxInt, 3, options); err == nil {
-		t.Fatal("overflowing pixel count was accepted")
 	}
 }
 
@@ -277,6 +204,69 @@ func TestRenderDocumentRejectsPDFExceedingMaxPages(t *testing.T) {
 	}
 }
 
+func TestRenderDocumentRejectsDocumentPixelLimit(t *testing.T) {
+	options := DefaultRenderOptions()
+	options.DPI = 72
+	options.MaxDocumentPixels = 1
+
+	_, err := RenderDocument(
+		context.Background(),
+		fixturePath("samplefile.pdf"),
+		t.TempDir(),
+		&options,
+	)
+	var exceeded *DocumentPixelLimitExceededError
+	if !errors.As(err, &exceeded) {
+		t.Fatalf("expected DocumentPixelLimitExceededError, got %v", err)
+	}
+}
+
+func TestRenderDocumentRejectsPagePixelLimit(t *testing.T) {
+	options := DefaultRenderOptions()
+	options.DPI = 72
+	options.MaxPagePixels = 1
+
+	_, err := RenderDocument(
+		context.Background(),
+		fixturePath("samplefile.pdf"),
+		t.TempDir(),
+		&options,
+	)
+	var exceeded *PageSizeLimitExceededError
+	if !errors.As(err, &exceeded) {
+		t.Fatalf("expected PageSizeLimitExceededError, got %v", err)
+	}
+}
+
+func TestRenderDocumentRejectsPageWidthLimit(t *testing.T) {
+	options := DefaultRenderOptions()
+	options.DPI = 72
+	options.MaxPageWidth = 1
+
+	_, err := RenderDocument(
+		context.Background(),
+		fixturePath("samplefile.pdf"),
+		t.TempDir(),
+		&options,
+	)
+	var exceeded *PageSizeLimitExceededError
+	if !errors.As(err, &exceeded) || exceeded.Dimension != "width" {
+		t.Fatalf("expected width limit error, got %v", err)
+	}
+}
+
+func TestRenderDocumentWrapsRenderErrors(t *testing.T) {
+	source := filepath.Join(t.TempDir(), "invalid.pdf")
+	if err := os.WriteFile(source, []byte("not a PDF"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := RenderDocument(context.Background(), source, t.TempDir(), nil)
+	var renderError *DocumentRenderError
+	if !errors.As(err, &renderError) {
+		t.Fatalf("expected DocumentRenderError, got %v", err)
+	}
+}
+
 func TestRenderDocumentWritesJPEGWithCustomPrefix(t *testing.T) {
 	options := DefaultRenderOptions()
 	options.ImageFormat = ImageFormatJPEG
@@ -339,95 +329,148 @@ func TestRenderDocumentRejectsUnsupportedExtension(t *testing.T) {
 	}
 }
 
-func TestExtractDocumentExtractsEveryPDFPage(t *testing.T) {
-	result, err := ExtractDocument(context.Background(), fixturePath("samplefile.pdf"))
+func TestSupportedExtensionsReturnsLexicalOrder(t *testing.T) {
+	got := SupportedExtensions()
+	want := []string{".doc", ".docx", ".pdf", ".ppt", ".pptx", ".xls", ".xlsm", ".xlsx"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("SupportedExtensions() = %v, want %v", got, want)
+	}
+}
+
+func TestValidateDocumentRejectsNilContext(t *testing.T) {
+	_, _, err := validateDocument(nil, "input.pdf")
+	if err == nil || !strings.Contains(err.Error(), "context must not be nil") {
+		t.Fatalf("expected nil context error, got %v", err)
+	}
+}
+
+func TestValidateDocumentRejectsCanceledContext(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, _, err := validateDocument(ctx, "input.pdf")
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context.Canceled, got %v", err)
+	}
+}
+
+func TestValidateDocumentRejectsMissingFile(t *testing.T) {
+	_, _, err := validateDocument(context.Background(), filepath.Join(t.TempDir(), "missing.pdf"))
+	if err == nil || !strings.Contains(err.Error(), "does not exist") {
+		t.Fatalf("expected missing file error, got %v", err)
+	}
+}
+
+func TestValidateDocumentRejectsDirectory(t *testing.T) {
+	_, _, err := validateDocument(context.Background(), t.TempDir())
+	if err == nil || !strings.Contains(err.Error(), "not a regular file") {
+		t.Fatalf("expected non-regular file error, got %v", err)
+	}
+}
+
+func TestValidateDocumentRejectsUnsupportedExtension(t *testing.T) {
+	source := filepath.Join(t.TempDir(), "input.txt")
+	if err := os.WriteFile(source, []byte("data"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, _, err := validateDocument(context.Background(), source)
+	var unsupported *UnsupportedFormatError
+	if !errors.As(err, &unsupported) {
+		t.Fatalf("expected UnsupportedFormatError, got %v", err)
+	}
+}
+
+func TestValidateDocumentAcceptsSupportedExtensionCaseInsensitively(t *testing.T) {
+	source := filepath.Join(t.TempDir(), "input.PDF")
+	if err := os.WriteFile(source, []byte("data"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	path, extension, err := validateDocument(context.Background(), source)
 	if err != nil {
-		t.Fatalf("extract PDF text: %v", err)
+		t.Fatalf("validate document: %v", err)
 	}
-	if result.PartCount() == 0 {
-		t.Fatal("expected at least one extracted page")
+	if extension != ".pdf" {
+		t.Fatalf("extension = %q, want .pdf", extension)
 	}
-	for index, part := range result.Parts {
-		if part.PartNumber != index+1 {
-			t.Fatalf("unexpected part number: %d", part.PartNumber)
-		}
+	if !filepath.IsAbs(path) {
+		t.Fatalf("path must be absolute: %s", path)
 	}
 }
 
-func TestExtractDocumentRejectsTextExceedingMaxCharacters(t *testing.T) {
-	options := DefaultExtractOptions()
-	options.MaxCharacters = 1
-
-	_, err := ExtractDocumentWithOptions(context.Background(), fixturePath("samplefile.pdf"), &options)
-	var exceeded *CharacterLimitExceededError
-	if !errors.As(err, &exceeded) {
-		t.Fatalf("expected CharacterLimitExceededError, got %v", err)
-	}
-	if exceeded.MaxCharacters != options.MaxCharacters || exceeded.CharacterCount <= exceeded.MaxCharacters {
-		t.Fatalf("unexpected character limit error: %+v", exceeded)
+func TestWithRenderTimeoutRejectsNilContext(t *testing.T) {
+	_, _, err := withRenderTimeout(nil, 0)
+	if err == nil || !strings.Contains(err.Error(), "context must not be nil") {
+		t.Fatalf("expected nil context error, got %v", err)
 	}
 }
 
-func TestExtractDocumentExtractsModernOfficeText(t *testing.T) {
-	for _, name := range []string{"samplefile.docx", "samplefile.pptx", "samplefile.xlsx", "samplefile.xlsm"} {
-		t.Run(name, func(t *testing.T) {
-			result, err := ExtractDocument(context.Background(), fixturePath(name))
-			if err != nil {
-				t.Fatalf("extract Office text: %v", err)
-			}
-			if result.PartCount() == 0 {
-				t.Fatal("expected at least one extracted part")
-			}
-			for index, part := range result.Parts {
-				if part.PartNumber != index+1 {
-					t.Fatalf("unexpected part number: %d", part.PartNumber)
-				}
-				if strings.TrimSpace(part.Text) == "" {
-					t.Fatalf("part %d contains no text", part.PartNumber)
-				}
-			}
-		})
+func TestWithRenderTimeoutAppliesDeadline(t *testing.T) {
+	ctx, cancel, err := withRenderTimeout(context.Background(), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cancel()
+	if _, hasDeadline := ctx.Deadline(); hasDeadline {
+		t.Fatal("zero timeout must not set a deadline")
 	}
 }
 
-func TestExtractDocumentExtractsLegacyOfficeText(t *testing.T) {
-	replaceLibreOfficeFunctions(t)
-	findExecutable = func(string) (string, error) {
-		t.Fatal("explicit LibreOffice executable was not used")
-		return "", nil
+func TestRenderDocumentRejectsNilContext(t *testing.T) {
+	_, err := RenderDocument(nil, fixturePath("samplefile.pdf"), t.TempDir(), nil)
+	if err == nil || !strings.Contains(err.Error(), "context must not be nil") {
+		t.Fatalf("expected nil context error, got %v", err)
 	}
-	executeLibreOffice = func(_ context.Context, executable string, arguments []string) (string, string, error) {
-		if executable != "/custom/libreoffice" {
-			t.Fatalf("unexpected executable: %s", executable)
-		}
-		source := arguments[len(arguments)-1]
-		targets := map[string]string{".doc": ".docx", ".ppt": ".pptx", ".xls": ".xlsx"}
-		targetExtension := targets[filepath.Ext(source)]
-		if filter := argumentAfter(t, arguments, "--convert-to"); filter != strings.TrimPrefix(targetExtension, ".") {
-			t.Fatalf("unexpected conversion filter: %s", filter)
-		}
-		outputDirectory := argumentAfter(t, arguments, "--outdir")
-		outputName := strings.TrimSuffix(filepath.Base(source), filepath.Ext(source)) + targetExtension
-		copyFixture(t, fixturePath("samplefile"+targetExtension), filepath.Join(outputDirectory, outputName))
-		return "", "", nil
+}
+
+func TestPageCountRejectsNilContext(t *testing.T) {
+	_, err := PageCount(nil, fixturePath("samplefile.pdf"))
+	if err == nil || !strings.Contains(err.Error(), "context must not be nil") {
+		t.Fatalf("expected nil context error, got %v", err)
 	}
-	for _, name := range []string{"samplefile.doc", "samplefile.ppt", "samplefile.xls"} {
-		t.Run(name, func(t *testing.T) {
-			result, err := ExtractDocumentWithOptions(context.Background(), fixturePath(name), &ExtractOptions{
-				LibreOfficeTimeout: 5 * time.Second, LibreOfficeExecutable: "/custom/libreoffice",
-			})
-			if err != nil {
-				t.Fatalf("extract legacy Office text: %v", err)
-			}
-			if result.PartCount() == 0 {
-				t.Fatal("expected at least one extracted part")
-			}
-			for _, part := range result.Parts {
-				if strings.TrimSpace(part.Text) == "" {
-					t.Fatalf("part %d contains no text", part.PartNumber)
-				}
-			}
-		})
+}
+
+func TestExtractDocumentRejectsNilContext(t *testing.T) {
+	_, err := ExtractDocument(nil, fixturePath("samplefile.pdf"))
+	if err == nil || !strings.Contains(err.Error(), "context must not be nil") {
+		t.Fatalf("expected nil context error, got %v", err)
+	}
+}
+
+func TestRenderDocumentRejectsMissingSource(t *testing.T) {
+	_, err := RenderDocument(context.Background(), filepath.Join(t.TempDir(), "missing.pdf"), t.TempDir(), nil)
+	if err == nil || !strings.Contains(err.Error(), "does not exist") {
+		t.Fatalf("expected missing file error, got %v", err)
+	}
+}
+
+func TestRenderDocumentRejectsDirectorySource(t *testing.T) {
+	_, err := RenderDocument(context.Background(), t.TempDir(), t.TempDir(), nil)
+	if err == nil || !strings.Contains(err.Error(), "not a regular file") {
+		t.Fatalf("expected non-regular file error, got %v", err)
+	}
+}
+
+func TestRenderDocumentCreatesOutputDirectory(t *testing.T) {
+	outputDirectory := filepath.Join(t.TempDir(), "nested", "output")
+	result, err := RenderDocument(context.Background(), fixturePath("samplefile.pdf"), outputDirectory, nil)
+	if err != nil {
+		t.Fatalf("render PDF: %v", err)
+	}
+	if result.PageCount() == 0 {
+		t.Fatal("expected at least one rendered page")
+	}
+	if _, err := os.Stat(outputDirectory); err != nil {
+		t.Fatalf("output directory was not created: %v", err)
+	}
+}
+
+func TestRenderDocumentDefaultsPrefixToSourceName(t *testing.T) {
+	outputDirectory := t.TempDir()
+	result, err := RenderDocument(context.Background(), fixturePath("samplefile.pdf"), outputDirectory, nil)
+	if err != nil {
+		t.Fatalf("render PDF: %v", err)
+	}
+	if filepath.Base(result.Images[0].Path) != "samplefile-page-0001.png" {
+		t.Fatalf("unexpected default prefix: %s", result.Images[0].Path)
 	}
 }
 

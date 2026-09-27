@@ -16,7 +16,7 @@ func main() {
 	source := "test/documents/samplefile.docx"
 	outputDirectory := "example/output"
 	options := renderer.DefaultRenderOptions()
-	options.DPI = 200
+	options.DPI = 300
 	options.ImageFormat = renderer.ImageFormatPNG
 	options.MaxPages = 3
 

@@ -1,10 +1,5 @@
 # document-image-renderer Design
-
-## Purpose
-
-`document-image-renderer` is a Go library and command-line tool that converts PDF and Microsoft Office documents into page-oriented PNG or JPEG images. Its Go API also extracts document text in source order.
-
-The public API lives in `pkg/renderer`. CLI-specific argument parsing and output handling are isolated in `internal/cli`. PDF rasterization uses PDFium compiled to WebAssembly, while Microsoft Office documents are converted to PDF with LibreOffice.
+`document-image-renderer` is a Go library and command-line tool that renders PDF and Microsoft Office documents as page-oriented PNG or JPEG images, and extracts their text in source order. The public API is `pkg/renderer`; the CLI is isolated in `internal/cli`. Rendering uses PDFium compiled to WebAssembly, while Office documents are converted with LibreOffice.
 
 ## Scope
 
@@ -15,9 +10,7 @@ The public API lives in `pkg/renderer`. CLI-specific argument parsing and output
 | PowerPoint | `.ppt`, `.pptx` | Slide | Slide |
 | Excel | `.xls`, `.xlsx`, `.xlsm` | Printed worksheet page | Worksheet |
 
-The output formats are lossless PNG and quality-configurable JPEG. XLS, XLSX, and XLSM use LibreOffice's `SinglePageSheets` PDF export option so that each worksheet produces one PDF page and therefore one image. XLSX and XLSM also apply matching page settings to a temporary copy.
-
-The actual output unit and order follow the pages fixed in the intermediate PDF. Print settings that this library does not explicitly modify, including hidden worksheets, print areas, and margins, follow LibreOffice's PDF export behavior.
+The output formats are lossless PNG and quality-configurable JPEG. XLS, XLSX, and XLSM use LibreOffice's `SinglePageSheets` PDF export option so that each worksheet produces one PDF page and therefore one image. For XLSX and XLSM, matching page settings are applied to a temporary copy. The intermediate PDF fixes the actual output order and unit; other print settings, such as hidden worksheets, print areas, and margins, follow LibreOffice's behavior.
 
 The following features are out of scope:
 
@@ -29,54 +22,42 @@ The following features are out of scope:
 
 ## Reproducibility
 
-In this library, reproduction means rendering every page in the intermediate PDF at the requested resolution and in the original order, without omission, when the same PDFium version, LibreOffice version, fonts, locale, and rendering options are used.
-
-LibreOffice, rather than Microsoft Office, determines the layout of Office documents. Differences in rendering engines, font metrics, font substitution, supported features, and LibreOffice versions can change pagination, shape placement, and image pixels. Environments that require stable output must pin the conversion tool versions and locale and install the fonts referenced by source documents.
+Reproducible output requires fixed PDFium and LibreOffice versions, fonts, locale, and rendering options. LibreOffice, not Microsoft Office, determines Office layout; differences in rendering engines, font substitution, and LibreOffice versions can change pagination and pixels.
 
 ## Architecture
 
 ```mermaid
 flowchart TD
   caller[Go API / CLI] --> validate[Validate input and options]
-  validate --> route{Input format}
-  route -->|PDF| rasterize[Render sequentially with PDFium]
-  route -->|Office| workspace[Create temporary workspace]
-  workspace --> prepare{Format-specific preparation}
-  prepare -->|DOC / DOCX / PPT| direct[Use original source]
-  prepare -->|PPTX| pptx[Normalize negative line extents]
-  prepare -->|XLS| xls[Select SinglePageSheets filter]
-  prepare -->|XLSX / XLSM| sheets[Fit each sheet to one landscape page]
-  direct --> libreoffice[Convert to PDF with LibreOffice]
-  pptx --> libreoffice
-  xls --> libreoffice
-  sheets --> excelFilter[Select SinglePageSheets filter]
-  excelFilter --> libreoffice
-  libreoffice --> rasterize
-  rasterize --> background{Preserve background?}
-  background -->|Transparent PNG| alpha[RGBA with alpha]
-  background -->|Default| white[Composite onto white]
-  alpha --> encode[Encode PNG / JPEG]
-  white --> encode
-  encode --> images[Sequential images and metadata]
-  validate --> extractRoute{Extract text}
+  validate --> render[Render document]
+  validate --> extract[Extract text]
+  render --> renderRoute{PDF or Office?}
+  renderRoute -->|PDF| pdfium[PDFium]
+  renderRoute -->|Office| officePDF[Prepare when needed and convert with LibreOffice]
+  officePDF --> pdfium
+  pdfium --> image[Sequential PNG or JPEG images]
+  extract --> extractRoute{Format}
   extractRoute -->|PDF| pdfText[PDFium page text]
-  extractRoute -->|Legacy Office| legacyOOXML[Convert to temporary OOXML]
-  legacyOOXML --> xmlText
-  legacyOOXML --> cellText
   extractRoute -->|DOCX / PPTX| xmlText[OOXML text nodes]
-  extractRoute -->|XLSX / XLSM| cellText[Worksheet cell values]
+  extractRoute -->|XLSX / XLSM| workbookText[Worksheet cell values]
+  extractRoute -->|DOC / PPT / XLS| legacy[Convert to OOXML, then extract]
+  legacy --> xmlText
+  legacy --> workbookText
   pdfText --> textParts[Sequential text parts]
   xmlText --> textParts
-  cellText --> textParts
+  workbookText --> textParts
 ```
 
-The conversion pipeline has three stages:
+For rendering, Office input is converted to a temporary PDF and PDF input is used directly. PDFium then processes pages sequentially and writes one image per page. Text extraction uses the source format where possible; legacy binary Office files are first converted to OOXML. PDF is the rendering intermediate representation, so the library does not reimplement Office layout.
 
-1. Validate the input, output destination, and options, and prepare a temporary copy when required for an Office document.
-2. Convert an Office document to PDF with a process-specific LibreOffice profile. PDF input skips this stage.
-3. Render every PDF page sequentially with PDFium and save it as PNG or JPEG.
+## Packages
 
-Using PDF as the intermediate representation fixes page dimensions, text, shapes, images, and placement without reimplementing the page layout of each Office format in Go.
+| Package | Responsibility |
+| --- | --- |
+| `cmd/document-image-renderer` | Process startup, signal handling, and exit status |
+| `internal/cli` | Flag parsing, standard I/O, and CLI exit codes |
+| `pkg/renderer` | Public API, validation, Office conversion, PDF rendering, and text extraction |
+| `test/integration` | End-to-end tests using document fixtures and installed dependencies |
 
 ## Public API
 
@@ -86,7 +67,7 @@ The primary rendering API is used as follows:
 
 ```go
 options := renderer.DefaultRenderOptions()
-options.DPI = 200
+options.DPI = 300
 options.ImageFormat = renderer.ImageFormatPNG
 
 result, err := renderer.RenderDocument(
@@ -117,7 +98,7 @@ Use `DefaultRenderOptions` or `DefaultExtractOptions` before overriding individu
 func RenderDocument(ctx context.Context, source, outputDirectory string, options *RenderOptions) (*RenderResult, error)
 ```
 
-`RenderDocument` creates `outputDirectory` when needed and renders each page of the source document in order. `RenderResult.Source` is the absolute input path; every `RenderedImage.Path` is an absolute output path. For Office input, LibreOffice produces a temporary PDF before rendering. The function returns no result on failure, but images written before a later failure remain in the output directory.
+`RenderDocument` creates `outputDirectory` when needed and renders each page in order. Office input is converted to a temporary PDF first. It returns no result on failure, but images written before a later failure remain in the output directory.
 
 ### Page count
 ```go
@@ -125,7 +106,7 @@ func PageCount(ctx context.Context, source string) (int, error)
 func PageCountWithOptions(ctx context.Context, source string, options *ExtractOptions) (int, error)
 ```
 
-`PageCount` returns the number of pages that `RenderDocument` would render without writing images. For Office input it converts to a temporary PDF. `PageCountWithOptions` controls the LibreOffice executable and timeout used for that conversion; `PageCount` uses `DefaultExtractOptions`.
+`PageCount` returns the number of pages that `RenderDocument` would render without writing images. `PageCountWithOptions` controls the LibreOffice executable and timeout; `PageCount` uses `DefaultExtractOptions`.
 
 ### Text extraction
 
@@ -134,7 +115,7 @@ func ExtractDocument(ctx context.Context, source string) (*ExtractResult, error)
 func ExtractDocumentWithOptions(ctx context.Context, source string, options *ExtractOptions) (*ExtractResult, error)
 ```
 
-These functions extract ordered text without writing files. PDF parts correspond to pages, PPT/PPTX parts to slides, and XLS/XLSX/XLSM parts to worksheets. DOC and DOCX return the document body as one part because OOXML does not define rendered page boundaries. Legacy DOC, PPT, and XLS files are converted to temporary OOXML with LibreOffice before extraction. `ExtractDocument` uses `DefaultExtractOptions`.
+These functions extract ordered text without writing files. PDF parts correspond to pages, presentations to slides, and workbooks to worksheets. DOC and DOCX return one document-body part. Legacy DOC, PPT, and XLS files are converted to temporary OOXML before extraction. `ExtractDocument` uses `DefaultExtractOptions`.
 
 ### Options
 
@@ -148,6 +129,8 @@ func (ExtractOptions) Validate() error
 | `RenderOptions` field | Default | Constraint and meaning |
 |---|---:|---|
 | `DPI` | `300` | Rendering resolution from 1 through 1200 DPI |
+| `RenderTimeout` | `120s` | Timeout for the complete render operation; `0` permits no timeout |
+| `LibreOfficeTimeout` | `120s` | Timeout for one Office conversion; `0` permits no timeout |
 | `MaxPages` | `0` | Maximum pages to render; `0` permits unlimited pages |
 | `MaxPDFBytes` | `134217728` | Maximum PDF input bytes; `0` permits unlimited bytes |
 | `MaxPageWidth` | `20000` | Maximum rendered page width; `0` permits unlimited width |
@@ -158,10 +141,9 @@ func (ExtractOptions) Validate() error
 | `MaxOOXMLMemberBytes` | `268435456` | Maximum uncompressed bytes per member; `0` permits unlimited bytes |
 | `MaxOOXMLTotalBytes` | `1073741824` | Maximum total uncompressed bytes; `0` permits unlimited bytes |
 | `ImageFormat` | `ImageFormatPNG` | PNG or JPEG output encoding |
-| `JPEGQuality` | `90` | Value from 1 through 100; validated even for PNG output |
+| `JPEGQuality` | `100` | Value from 1 through 100; validated even for PNG output |
 | `TransparentBackground` | `false` | Preserve PDF page alpha for PNG output |
 | `FilenamePrefix` | Source basename without extension | Empty selects the source stem; a non-empty value must be one filename component |
-| `LibreOfficeTimeout` | `120s` | Timeout for one Office conversion; `0` permits no timeout |
 | `LibreOfficeExecutable` | Auto-detected | Explicit LibreOffice executable when provided |
 
 `ImageFormat` is a string type with the only valid values `ImageFormatPNG` (`"png"`) and `ImageFormatJPEG` (`"jpeg"`).
@@ -178,7 +160,7 @@ JPEG has no alpha channel, so combining `ImageFormatJPEG` with `TransparentBackg
 | `LibreOfficeTimeout` | `120s` | Timeout for a legacy Office conversion; `0` permits no timeout |
 | `LibreOfficeExecutable` | Auto-detected | Explicit LibreOffice executable when provided |
 
-. Modern OOXML extraction does not invoke LibreOffice, though options are validated before routing.
+Modern OOXML extraction does not invoke LibreOffice, though options are validated before routing.
 
 ### Results
 
@@ -212,11 +194,18 @@ func (ExtractResult) Part(number int) (TextPart, bool)
 func (ExtractResult) Text() string
 ```
 
-`RenderedImage` values are in PDF page order and have one-based `PageNumber` values. `RenderResult.PageCount` returns `len(Images)`. `TextPart` values are in source order and have one-based `PartNumber` values. `ExtractResult.Part` returns the part with the requested number; `Text` joins all parts with one blank line.
+Image and text parts are ordered and numbered from one. `RenderResult.PageCount` returns `len(Images)`; `ExtractResult.Part` looks up a part by number; `Text` joins parts with one blank line.
+
+
+### Cancellation, Concurrency, and Resource Management
+
+`RenderTimeout` limits the complete render operation; an earlier caller deadline wins. Calls own independent LibreOffice profiles and PDFium pools, and may run concurrently unless they write the same output name. PDFs and live page bitmaps are held in memory; services processing untrusted input should also enforce process-level CPU, memory, input-size, storage, and concurrency limits.
+
+DOCX and PPTX extraction preserves paragraph boundaries, explicit breaks, and tabs. PPTX slide order follows presentation relationships; hidden slides are included and orphan slide parts are ignored.
 
 ### Errors
 
-Callers can use `errors.As` for the following public error types:
+The error types correspond to processing boundaries and can be inspected with `errors.As` and `errors.Is`.
 
 | Error type | Condition |
 |---|---|
@@ -233,46 +222,14 @@ Callers can use `errors.As` for the following public error types:
 | `DocumentRenderError` | PDF rasterization or image writing fails; includes `Path` and an unwrapped cause |
 | `DocumentExtractionError` | Text extraction or text-limit validation fails; includes `Path` and an unwrapped cause |
 
-Invalid options, a `nil` context, invalid input paths, and output-directory creation failures are ordinary errors with operation context rather than the public document-processing error types.
+Invalid options, a `nil` context, invalid input paths, and output-directory creation failures are ordinary contextual errors. Formats are selected by lowercased filename extension; file content is not inspected.
 
-## Input Validation and Routing
-
-The rendering and extraction entry points share document validation. They perform the following checks before starting an external tool:
-
-1. The `context.Context` is not `nil`.
-2. Every option satisfies its constraints.
-3. The input path can be made absolute and identifies an existing regular file.
-4. The lowercased extension is in the supported set.
-5. For rendering, the output path can be made absolute and its directory can be created.
-
-PDF input proceeds directly to rasterization. Every other supported format proceeds through Office conversion, then sends the intermediate PDF through the same PDF rendering path. The library does not infer formats from file contents.
 
 ## Office Conversion
 
-### Executable resolution
+### Workspace and invocation
 
-When `LibreOfficeExecutable` is set, its value is used directly. Otherwise, the library searches `PATH` for `libreoffice` and then `soffice`. If neither is found, only Office input fails with `DependencyNotFoundError`. PDF input does not require LibreOffice.
-
-### Temporary workspace
-
-Each Office conversion creates an independent workspace under the operating system's temporary directory.
-
-```text
-document-image-renderer-*/
-  profile/                 Dedicated LibreOffice user profile
-  output/                  Intermediate PDF or OOXML document
-  <temporary-office-file>  Prepared OOXML, when required
-```
-
-LibreOffice receives `-env:UserInstallation=file:...`. This prevents contention for the default profile lock and keeps user-specific settings out of the conversion path. The profile configures macro security level 3, Very High.
-
-After a successful conversion, the workspace is removed when rendering or extraction finishes. On failure, it is removed as soon as the failure is established. The source file is never modified.
-
-### LibreOffice invocation
-
-LibreOffice is invoked with an argument array rather than through a shell. The command includes `--headless`, `--nologo`, `--nodefault`, `--nolockcheck`, and `--nofirststartwizard`. Standard output and standard error are captured for diagnostics.
-
-The invocation derives a context with the `LibreOfficeTimeout` deadline from the parent context. `exec.CommandContext` stops the process when that deadline expires or the parent context is canceled. A successful process exit is still considered a conversion failure unless a regular target file with the expected name was produced.
+`LibreOfficeExecutable` is used directly when set; otherwise the library searches `PATH` for `libreoffice`, then `soffice`. Each conversion owns a temporary workspace, isolated LibreOffice profile, and prepared OOXML copy when needed. LibreOffice runs without a shell with macro security set to Very High, and the source is never modified. Conversion fails unless the expected regular output exists; standard output and standard error are retained for diagnostics.
 
 ### Format-specific preparation
 
@@ -284,91 +241,48 @@ The invocation derives a context with the `LibreOfficeTimeout` deadline from the
 | XLS | Set `SinglePageSheets=true` in the Calc PDF export filter | Fit each sheet to one page without rewriting the binary format |
 | XLSX, XLSM | Apply the same `SinglePageSheets` filter; also set `fitToPage=1`, `fitToWidth=1`, `fitToHeight=1`, and landscape orientation on every worksheet, and remove `scale` | Ensure each worksheet produces exactly one PDF page while keeping explicit page settings in the temporary OOXML copy |
 
-PPTX normalization applies only to preset shapes whose type is `line`. For each axis with a negative extent, it adds that extent to the offset and replaces the extent with its absolute value. This normalizes the representation while preserving the endpoints. When no target is changed, the original source is used directly.
-
-XLSX and XLSM settings are applied to `xl/worksheets/sheet*.xml`. Missing `sheetPr`, `pageSetUpPr`, and `pageSetup` elements are added while respecting the relevant OOXML element ordering.
-
-OOXML member count and declared uncompressed sizes are checked before expansion. Every member is also read through byte-counting limits, so incorrect ZIP metadata cannot bypass per-member or total limits. A limit or archive error stops conversion rather than passing an unchecked source to LibreOffice. Rewriting reconstructs ZIP members in a temporary file and never writes back to the source.
+PPTX normalization preserves line endpoints; when no shape changes, the original source is used. XLSX and XLSM settings are applied to `xl/worksheets/sheet*.xml`. OOXML member and expanded-byte limits are enforced both from ZIP metadata and while reading members, and rewriting always targets a temporary file.
 
 ## PDF Rendering
 
-PDF rendering uses the `go-pdfium` WebAssembly backend running on wazero. It therefore requires neither CGO, an operating-system PDF package, nor an external PDF renderer process.
-
-Each PDF rendering or extraction call initializes a dedicated PDFium pool with a minimum and maximum of one instance. Rendering and extraction share the same internal PDF lifecycle helper. The go-pdfium API requires a contiguous byte slice, so the PDF is held in memory while open. Its size is checked before allocation and the context-aware read is independently capped by `MaxPDFBytes`. The pool, instance, and document are always closed when the call ends.
-
-Pages are processed sequentially from the zero-based PDFium index and exposed as one-based page numbers. The wazero runtime enables close-on-context-done with PDFium's required core features. A cancellation watcher kills the active PDFium instance, waits for its termination before returning, and then closes the pool. Pages are not rendered concurrently, which keeps output order and the number of live page bitmaps predictable.
-
-Page width and height are obtained before bitmap creation for both transparent and opaque rendering. Dimension, per-page pixel, and cumulative document pixel limits are checked with overflow-safe arithmetic before rendering or encoding.
+PDF rendering uses `go-pdfium` on wazero, requiring neither CGO nor an external renderer. Each call owns a single-instance pool and holds the PDF in memory, bounded by `MaxPDFBytes`. Pages are rendered sequentially; page dimensions and pixel limits are checked before bitmap creation. Cancellation kills the active PDFium instance and waits for it to terminate.
 
 ### Background handling
 
-- Default rendering uses PDFium's DPI rendering API with form rendering enabled, then composites the result onto an opaque white background.
-- Transparent PNG rendering creates an alpha-enabled PDFium bitmap, initializes it as transparent, and renders annotations into it. The WASM buffer is copied into a Go byte slice so that the Go image remains valid after the PDFium bitmap is destroyed.
-
-Transparency is accepted only for PNG output. Encoding uses the Go standard library's `image/png` and `image/jpeg` packages through a context-aware writer. Images are encoded to a temporary file in the destination directory and renamed only after successful completion, so cancellation or encoding failure does not publish a partial image.
+Default rendering composites onto white. Transparent output is PNG-only and uses an alpha bitmap. Images are written to a temporary destination file and renamed after a complete encode, so failed or canceled encodes do not publish a partial file.
 
 ## Output Contract
 
-The output directory is created with mode `0755` when necessary. Output names use the following forms:
+The output directory is created with mode `0755` when necessary. Output names are:
 
 ```text
 <prefix>-page-<page-number>.png
 <prefix>-page-<page-number>.jpg
 ```
 
-Page numbers are zero-padded to at least four digits. For a document with 10,000 or more pages, the width expands to the number of digits in the total page count. This keeps lexical filename order aligned with page order.
-
-`os.Create` replaces files with generated names that already exist. Unrelated files and stale numbered files beyond the page count of the current conversion are not removed.
-
-Output is not transactional. If rendering, encoding, saving, or cancellation fails on a later page, images already written for earlier pages remain in place. No `RenderResult` is returned on error. A caller that must expose only complete results should render into a dedicated temporary output directory and move it after success.
-
-For XLS, XLSX, and XLSM input, each exported worksheet corresponds to exactly one PDF page and one output image, in workbook order.
-
-## Error Model
-
-Public error types correspond to processing boundaries so callers can distinguish causes with `errors.As` and `errors.Is`.
-
-| Error type | Condition | Diagnostic data |
-|---|---|---|
-| `UnsupportedFormatError` | The input extension is unsupported | Extension and absolute input path |
-| `DependencyNotFoundError` | LibreOffice cannot be resolved for Office input | Dependency name and required operation |
-| `PageLimitExceededError` | The rendered page count exceeds `RenderOptions.MaxPages` | Actual page count and configured limit |
-| `PageSizeLimitExceededError` | A page exceeds a dimension or per-page pixel limit | Page number, dimensions, pixels, and configured limit |
-| `DocumentPixelLimitExceededError` | Cumulative rendered pixels exceed the document limit | Pixel count and configured limit |
-| `PDFSizeLimitExceededError` | PDF input exceeds its byte limit | Observed bytes and configured limit |
-| `CharacterLimitExceededError` | Extracted text exceeds `ExtractOptions.MaxCharacters` | Actual Unicode character count and configured limit |
-| `OOXMLLimitExceededError` | An OOXML archive exceeds a member count or expanded-byte limit | Limit kind, member when applicable, observed value, and limit |
-| `DocumentConversionError` | Temporary workspace setup, LibreOffice execution, timeout, or missing conversion output fails | Input path, underlying cause, and LibreOffice standard output and standard error |
-| `DocumentPageCountError` | PDF page counting fails | Input path and underlying cause |
-| `DocumentRenderError` | PDF reading, PDFium initialization, document opening, page rendering, image saving, or cancellation during rendering fails | PDF path, operation including the page number when applicable, and underlying cause |
-| `DocumentExtractionError` | PDF, OOXML, or workbook text extraction, including character-limit validation, fails | Input path and underlying cause |
-
-`DocumentConversionError`, `DocumentPageCountError`, `DocumentRenderError`, and `DocumentExtractionError` implement `Unwrap`. Invalid options, a `nil` context, a missing input, a non-regular input, path resolution failures, and output directory creation failures are returned as ordinary errors with operation context rather than being wrapped in these public types.
-
-For Office input, a rendering error references the temporary PDF path. `RenderResult.Source` always references the original absolute input path.
-
-## Cancellation, Concurrency, and Resource Management
-
-The `context.Context` is passed to LibreOffice and the PDFium WebAssembly runtime. Cancellation interrupts in-flight PDFium calls and waits for instance termination. PDF reading and PNG/JPEG writes also check the context. Standard-library encoder CPU work between writes cannot be preempted, so cancellation may be observed at the next output write rather than at the exact cancellation instant.
-
-Each call owns an independent LibreOffice profile and PDFium pool, so separate calls can run concurrently when they use different output destinations. The library does not coordinate calls that share the same output directory and prefix, and it does not guarantee the result of concurrent writes to the same filename.
-
-The complete PDF byte stream is held in memory because go-pdfium does not expose PDFium's random-access custom document loader. The default 128 MiB `MaxPDFBytes` bounds this allocation; setting it to zero restores unlimited behavior. During rendering, at least the PDFium-side and Go-side page bitmaps are also present; opaque rendering additionally allocates the white compositing image. An RGBA bitmap requires approximately four bytes per pixel.
-
-The library leaves page count, extracted character count, and final encoded output size unlimited by default. It does impose default OOXML expansion and PDF pixel limits. Services that process untrusted documents should set `MaxPages` and `MaxCharacters` and retain process-level CPU, memory, compressed-input-size, storage, and concurrency limits in addition to context deadlines.
-
-DOCX and PPTX text extraction concatenates text runs within a paragraph and preserves paragraph boundaries, explicit breaks, and tabs. PPTX slide order follows `p:sldIdLst` and its relationships. Hidden slides are included in that list order; orphan slide parts are ignored. Workbook rows and XML tokens consume the shared character budget while extraction is in progress.
+Page numbers are padded to at least four digits and expand for 10,000 or more pages. Existing generated names are replaced, but unrelated and stale files are retained. Output is not transactional: earlier images remain after a later failure. Excel output has one image per exported worksheet in workbook order.
 
 ## Security
 
-- LibreOffice is launched without a shell, so an input path is not interpreted as part of a command string.
-- Each Office conversion uses an isolated user profile with macro security set to Very High. XLSM macros are not executed.
-- OOXML modifications and LibreOffice output are restricted to the dedicated temporary workspace, and the source file is not modified.
-- The library is not itself a sandbox. Protection from malicious documents parsed by PDFium or LibreOffice depends on current dependency versions and isolation supplied by the execution environment.
+- **No shell invocation**: LibreOffice runs via `exec.CommandContext` with an argument array, so paths and arguments cannot inject shell commands.
+- **Isolated LibreOffice profile**: each conversion uses a fresh temporary profile (`-env:UserInstallation`) with `--headless` and related flags; macro security is Very High (`MacroSecurityLevel=3`), so XLSM macros are not executed.
+- **Source documents are never modified**: OOXML preparation runs on temporary copies in the per-conversion workspace; the original file is only read.
+- **Temporary workspace permissions**: workspace and output directories are `0700`, the profile file is `0600`, and the workspace is removed after each conversion.
+- **Resource limits with overflow-safe arithmetic**: `MaxPDFBytes`, `MaxPages`, page dimension/pixel limits, `MaxOOXML*`, and `MaxCharacters` bound memory, rendering, and text. OOXML limits are enforced from ZIP metadata and while streaming members, mitigating zip-bomb-style archives.
+- **Cancellation and timeouts**: context cancellation terminates LibreOffice and interrupts PDFium; `RenderTimeout` and `LibreOfficeTimeout` bound operation duration.
+- **Atomic image publication**: images are encoded to a temporary file and renamed only after a complete encode, so failed or canceled encodes never publish a partial image.
+- **Filename prefix validation**: `FilenamePrefix` must be a single path component, preventing path traversal through generated output names.
+- **The library is not a sandbox**: PDFium (WASM) and LibreOffice run on the host. Malicious documents can exploit vulnerabilities in PDFium, wazero, LibreOffice, or the OOXML libraries; keep dependencies current and run in an isolated host environment.
+- **Enforce process-level limits**: services processing untrusted input should also enforce CPU, memory, input-size, storage, and concurrency limits; the library's limits are defense in depth, not a complete boundary.
+- **Formats are selected by extension only**: file content is not inspected, so a mislabeled file is processed according to its extension.
+- **Output is not transactional**: images written before a later failure remain in the output directory; callers needing all-or-nothing output must stage and publish themselves.
+- **Existing output files are replaced**: generated names are overwritten, but unrelated and stale files are retained; use a dedicated output directory.
+- **Concurrent writes to the same output name are not coordinated**: callers must avoid concurrent writes to the same filename.
+- **Reproducibility depends on the environment**: LibreOffice, not Microsoft Office, determines Office layout; fixed PDFium/LibreOffice versions, fonts, and locale are required for reproducible output.
 
 ## CLI Design
 
-`cmd/document-image-renderer` creates a context that handles operating-system signals and delegates to `internal/cli.Run`. The CLI exposes the library options as flags and accepts `SOURCE OUTPUT_DIRECTORY` as positional arguments.
+`cmd/document-image-renderer` creates a context that handles operating-system signals and delegates to `internal/cli.Run`. The CLI exposes the library options as flags and accepts `SOURCE OUTPUT_DIRECTORY` as positional arguments. `--render-timeout` limits the complete render operation, while `--timeout` retains its existing meaning as the limit for each LibreOffice conversion; both default to 120 seconds.
 
 On success, each generated image path is followed by the path of its UTF-8 text file. A text file uses the same stem as its image, replacing the image extension with `.txt`. The CLI matches `RenderedImage.PageNumber` to `TextPart.PartNumber`; when no corresponding part exists, it writes an empty text file. This occurs for additional DOC or DOCX pages because those formats expose one document-body text part rather than rendered page boundaries. Paths are emitted only after rendering, extraction, and all text writes succeed. Diagnostics and usage information are written to standard error. Exit codes have the following meanings:
 
@@ -379,59 +293,3 @@ On success, each generated image path is followed by the path of its UTF-8 text 
 | `2` | Flag parsing failed or positional arguments were invalid |
 
 The CLI contains no document conversion or extraction logic. It delegates to `renderer.RenderDocument` and `renderer.ExtractDocumentWithOptions`, then writes one text artifact for each rendered image.
-
-## Package Structure
-
-```text
-cmd/
-  document-image-renderer/
-    main.go                 Process startup, signals, and exit code
-internal/
-  cli/
-    cli.go                  Argument parsing and standard I/O
-pkg/
-  renderer/
-    doc.go                  Public package documentation
-    models.go               Options and result models
-    errors.go               Public error types
-    renderer.go             Shared validation and rendering pipeline control
-    extract.go              Extraction API and format routing
-    office.go               LibreOffice execution and temporary workspace
-    ooxml.go                PPTX/XLSX/XLSM preparation
-    ooxml_text.go           DOCX/PPTX text extraction
-    workbook_text.go        XLSX/XLSM cell extraction
-    pdf.go                  Shared PDFium lifecycle, rendering, and extraction
-test/
-  documents/                Document fixtures
-  integration/              Integration tests using real tools
-example/                    Public API example
-```
-
-The primary direct dependencies are `go-pdfium` for PDF rendering and extraction, `etree` for XML editing, and `excelize` for workbook text extraction. The PDFium WASM backend depends on wazero through `go-pdfium`. LibreOffice is a system dependency for Office rendering and legacy DOC, PPT, or XLS extraction, not a Go module dependency.
-
-The `vllm-file-gateway` project under `temp/` is a read-only integration reference. This module neither imports nor reads it at build time or runtime.
-
-## Testing Strategy
-
-### Unit tests
-
-Tests under `pkg/renderer` verify the following behavior:
-
-- Every PDF page is rendered in order, and sequential filenames and dimension metadata match the actual image files.
-- JPEG, custom prefixes, and transparent PNG output follow their options.
-- Unsupported extensions return the corresponding public error type.
-- LibreOffice discovery, isolated profiles, macro security configuration, and the XLS export filter are correct.
-- LibreOffice standard output and standard error are retained on conversion errors.
-- Negative PPTX line extents and the XLSX/XLSM one-page landscape settings are rewritten correctly.
-- PDF, OOXML, workbook, and legacy Office extraction preserve source order.
-- Option validation, text joining, result models, and CLI exit codes satisfy the public contract.
-
-LibreOffice discovery and execution are replaceable at small function boundaries, allowing unit tests to avoid an external process. Actual PDFium rendering is exercised with a small PDF fixture.
-
-### Integration tests
-
-When `RUN_INTEGRATION_TESTS=1`, integration tests dynamically collect every file directly under `test/documents`. For each document, they verify that at least one image and one text part are generated, every image can be opened by a Go image decoder, dimensions are positive and match the metadata, and the SHA-256 hash of the source file does not change.
-
-Office cases are skipped when LibreOffice is unavailable. `make verify` runs the standard checks, while `make test-integration` includes real Office conversion.
-
-Pixel-level regressions can be detected by comparing perceptual hashes or image differences against reference images in an environment with fixed PDFium, LibreOffice, fonts, and locale. Tool updates can produce legitimate layout differences, so reference images should be updated only after visual review.

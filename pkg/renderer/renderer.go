@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 )
 
 // supportedExtensions lists every input format accepted by the renderer.
@@ -38,7 +39,6 @@ func PageCountWithOptions(ctx context.Context, source string, options *ExtractOp
 	if err := extractOptions.Validate(); err != nil {
 		return 0, err
 	}
-
 	sourcePath, extension, err := validateDocument(ctx, source)
 	if err != nil {
 		return 0, err
@@ -82,6 +82,12 @@ func RenderDocument(
 	if err := renderOptions.Validate(); err != nil {
 		return nil, err
 	}
+	renderContext, cancel, err := withRenderTimeout(ctx, renderOptions.RenderTimeout)
+	if err != nil {
+		return nil, err
+	}
+	defer cancel()
+	ctx = renderContext
 
 	sourcePath, extension, err := validateDocument(ctx, source)
 	if err != nil {
@@ -117,6 +123,17 @@ func RenderDocument(
 		return nil, err
 	}
 	return &RenderResult{Source: sourcePath, Images: images}, nil
+}
+
+func withRenderTimeout(ctx context.Context, timeout time.Duration) (context.Context, context.CancelFunc, error) {
+	if ctx == nil {
+		return nil, func() {}, fmt.Errorf("context must not be nil")
+	}
+	if timeout > 0 {
+		renderContext, cancel := context.WithTimeout(ctx, timeout)
+		return renderContext, cancel, nil
+	}
+	return ctx, func() {}, nil
 }
 
 // validateDocument resolves the source to an absolute path and verifies that it

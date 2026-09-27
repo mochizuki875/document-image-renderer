@@ -7,11 +7,17 @@ func TestDefaultRenderOptionsAreValid(t *testing.T) {
 	if err := options.Validate(); err != nil {
 		t.Fatalf("default options must be valid: %v", err)
 	}
-	if options.DPI != 300 || options.ImageFormat != ImageFormatPNG || options.JPEGQuality != 90 {
+	if options.DPI != 300 || options.ImageFormat != ImageFormatPNG || options.JPEGQuality != 100 {
 		t.Fatalf("unexpected defaults: %+v", options)
 	}
 	if options.MaxPDFBytes == 0 {
 		t.Fatal("default PDF byte limit must be finite")
+	}
+}
+
+func TestDefaultRenderTimeout(t *testing.T) {
+	if timeout := DefaultRenderOptions().RenderTimeout; timeout.Seconds() != 120 {
+		t.Fatalf("unexpected render timeout: %s", timeout)
 	}
 }
 
@@ -36,9 +42,28 @@ func TestExtractOptionsRejectNegativeMaxCharacters(t *testing.T) {
 	}
 }
 
+func TestExtractOptionsRejectNegativeMaxOOXMLMembers(t *testing.T) {
+	options := DefaultExtractOptions()
+	options.MaxOOXMLMembers = -1
+	if err := options.Validate(); err == nil {
+		t.Fatal("expected validation error")
+	}
+}
+
+func TestExtractOptionsRejectNegativeLibreOfficeTimeout(t *testing.T) {
+	options := DefaultExtractOptions()
+	options.LibreOfficeTimeout = -1
+	if err := options.Validate(); err == nil {
+		t.Fatal("expected validation error")
+	}
+}
+
 func TestRenderOptionsRejectInvalidValues(t *testing.T) {
 	tests := map[string]func(*RenderOptions){
-		"dpi":          func(options *RenderOptions) { options.DPI = 0 },
+		"dpi": func(options *RenderOptions) { options.DPI = 0 },
+		"render timeout": func(options *RenderOptions) {
+			options.RenderTimeout = -1
+		},
 		"max pages":    func(options *RenderOptions) { options.MaxPages = -1 },
 		"image format": func(options *RenderOptions) { options.ImageFormat = "gif" },
 		"jpeg quality": func(options *RenderOptions) { options.JPEGQuality = 101 },
@@ -47,6 +72,9 @@ func TestRenderOptionsRejectInvalidValues(t *testing.T) {
 		},
 		"timeout":            func(options *RenderOptions) { options.LibreOfficeTimeout = -1 },
 		"filename traversal": func(options *RenderOptions) { options.FilenamePrefix = "../outside" },
+		"max page width":     func(options *RenderOptions) { options.MaxPageWidth = -1 },
+		"max page height":    func(options *RenderOptions) { options.MaxPageHeight = -1 },
+		"max ooxml members":  func(options *RenderOptions) { options.MaxOOXMLMembers = -1 },
 	}
 
 	for name, mutate := range tests {
@@ -57,6 +85,14 @@ func TestRenderOptionsRejectInvalidValues(t *testing.T) {
 				t.Fatal("expected validation error")
 			}
 		})
+	}
+}
+
+func TestRenderOptionsAllowUnlimitedRenderTimeout(t *testing.T) {
+	renderOptions := DefaultRenderOptions()
+	renderOptions.RenderTimeout = 0
+	if err := renderOptions.Validate(); err != nil {
+		t.Fatalf("render options must allow an unlimited render timeout: %v", err)
 	}
 }
 

@@ -140,16 +140,28 @@ Install the `document-image-renderer` command with `go install`:
 go install github.com/mochizuki875/document-image-renderer/cmd/document-image-renderer@latest
 ```
 
-The binary is placed in `$GOBIN`, or `$GOPATH/bin` when `GOBIN` is unset. Add that directory to `PATH` if it is not already there:
+The binary is placed in `$GOBIN`, or `$(go env GOPATH)/bin` when `GOBIN` is unset. Add that directory to `PATH` if it is not already there:
 
 ```bash
 export PATH="$(go env GOPATH)/bin:$PATH"
+```
+
+If `GOBIN` is set, add it instead:
+
+```bash
+export PATH="$GOBIN:$PATH"
 ```
 
 Verify the installation:
 
 ```bash
 document-image-renderer --help
+```
+
+To install the version in the current checkout instead of the latest release, run:
+
+```bash
+go install ./cmd/document-image-renderer
 ```
 
 ```bash
@@ -160,7 +172,7 @@ Example:
 
 ```bash
 document-image-renderer \
-  --dpi 200 \
+  --dpi 300 \
   --format png \
   test/documents/samplefile.docx \
   example/output
@@ -186,7 +198,7 @@ import "github.com/mochizuki875/document-image-renderer/pkg/renderer"
 
 <details><summary>Library usage example</summary>
 
-Pass `nil` render options to use the defaults. Use `DefaultRenderOptions` before overriding individual fields. `ExtractDocument` uses default dependency settings; use `ExtractDocumentWithOptions` and `DefaultExtractOptions` to set the LibreOffice timeout or executable used for legacy Office extraction.
+Pass `nil` render options to use the defaults. Use `DefaultRenderOptions` before overriding individual fields. `ExtractDocument` uses default limits and dependency settings; use `ExtractDocumentWithOptions` and `DefaultExtractOptions` to configure them.
 
 `example/example.go`
 ```go
@@ -208,7 +220,7 @@ func main() {
 	source := "test/documents/samplefile.xlsx"
 	outputDirectory := "example/output"
 	options := renderer.DefaultRenderOptions()
-	options.DPI = 200
+	options.DPI = 300
 	options.ImageFormat = renderer.ImageFormatPNG
 
 	result, err := renderer.RenderDocument(
@@ -248,77 +260,8 @@ go run example/example.go
 
 </details>
 
-## Render options
-
-| Field | Default | Description |
-|---|---:|---|
-| `DPI` | `300` | Resolution from 1 to 1200 DPI |
-| `MaxPages` | `0` | Maximum pages to render; `0` permits unlimited pages |
-| `MaxPDFBytes` | `134217728` | Maximum PDF input size; `0` permits unlimited bytes |
-| `MaxPageWidth` | `20000` | Maximum rendered page width in pixels; `0` permits unlimited width |
-| `MaxPageHeight` | `20000` | Maximum rendered page height in pixels; `0` permits unlimited height |
-| `MaxPagePixels` | `200000000` | Maximum pixels in one page; `0` permits unlimited pixels |
-| `MaxDocumentPixels` | `1000000000` | Maximum pixels across all pages; `0` permits unlimited pixels |
-| `MaxOOXMLMembers` | `10000` | Maximum ZIP members in modern Office input; `0` permits unlimited members |
-| `MaxOOXMLMemberBytes` | `268435456` | Maximum uncompressed bytes in one OOXML member; `0` permits unlimited bytes |
-| `MaxOOXMLTotalBytes` | `1073741824` | Maximum total uncompressed OOXML bytes; `0` permits unlimited bytes |
-| `ImageFormat` | `png` | `png` or `jpeg` |
-| `JPEGQuality` | `90` | JPEG quality from 1 to 100 |
-| `TransparentBackground` | `false` | Preserve a transparent PDF page background in PNG |
-| `FilenamePrefix` | source stem | Output filename prefix |
-| `LibreOfficeTimeout` | `120s` | Office conversion timeout; `0` permits unlimited time |
-| `LibreOfficeExecutable` | auto-detected | Explicit LibreOffice executable path |
-
-The command-line tool also accepts `--max-characters` to limit extracted Unicode characters; `0` permits unlimited characters.
-
-Output names use `<prefix>-page-0001.png` or `.jpg`. Existing files with the same names are replaced; unrelated output files remain untouched.
-
-Rendering is page-oriented rather than transactional. If a later page fails, images already written for earlier pages remain in the output directory. The returned `RenderResult.Source` is the absolute input path.
-
-`MaxPages` rejects PDFs before any image is rendered when their page count exceeds the limit. Office documents are first converted to a temporary PDF by LibreOffice, then rejected before image rendering when that PDF exceeds the limit.
-
-## Page counts
-
-`PageCount` returns a document's rendered page count without creating images or extracting text. For Office documents, it first performs the same temporary PDF conversion used for rendering. Use `PageCountWithOptions` with `ExtractOptions` to configure the LibreOffice timeout or executable.
-
-```go
-pages, err := renderer.PageCount(ctx, "report.docx")
-```
-
-## Extract options
-
-| Field | Default | Description |
-|---|---:|---|
-| `MaxCharacters` | `0` | Maximum extracted Unicode characters; `0` permits unlimited characters |
-| `MaxPDFBytes` | `134217728` | Maximum PDF input size for page counting or extraction; `0` permits unlimited bytes |
-| `MaxOOXMLMembers` | `10000` | Maximum ZIP members in OOXML input; `0` permits unlimited members |
-| `MaxOOXMLMemberBytes` | `268435456` | Maximum uncompressed bytes in one OOXML member; `0` permits unlimited bytes |
-| `MaxOOXMLTotalBytes` | `1073741824` | Maximum total uncompressed OOXML bytes; `0` permits unlimited bytes |
-| `LibreOfficeTimeout` | `120s` | Legacy Office conversion timeout; `0` permits unlimited time |
-| `LibreOfficeExecutable` | auto-detected | Explicit LibreOffice executable path |
-
-`MaxCharacters` counts Unicode characters while output is built and stops extraction as soon as the limit is exceeded. No partial result is returned. PPTX order is resolved from `presentation.xml` relationships rather than slide filenames; hidden slides remain included in that order, while orphan slide parts are excluded. DOCX and PPTX runs within a paragraph are concatenated, paragraph boundaries become newlines, and explicit breaks and tabs are preserved.
-
-## Errors and cancellation
-
-`RenderDocument`, `PageCount`, and extraction APIs accept a `context.Context`. Cancellation stops an active LibreOffice conversion and interrupts in-flight PDFium WebAssembly execution. Callers can use `errors.As` with these public error types:
-
-- `UnsupportedFormatError`
-- `DependencyNotFoundError`
-- `DocumentConversionError`
-- `DocumentPageCountError`
-- `DocumentRenderError`
-- `DocumentExtractionError`
-- `PageLimitExceededError`
-- `PageSizeLimitExceededError`
-- `DocumentPixelLimitExceededError`
-- `PDFSizeLimitExceededError`
-- `CharacterLimitExceededError`
-- `OOXMLLimitExceededError`
-
-PDFium's current Go API requires a contiguous byte slice, so PDF input is held in memory while PDFium uses it. `MaxPDFBytes` bounds that allocation by checking the file size before reading and enforcing the same limit during a context-aware read. PNG and JPEG output is encoded through a context-aware writer into a temporary file; cancellation prevents a partial file from replacing the destination. Cancellation is observed at encoder writes, so CPU work between writes cannot be preempted by the standard-library encoders.
-
-`DocumentConversionError` retains LibreOffice standard output and standard error for diagnostics. Input-validation and filesystem errors may be returned directly.
+## API Reference
+- [API Reference](./DESIGN.md#api-reference)
 
 ## Development
 
