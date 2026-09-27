@@ -254,6 +254,14 @@ go run example/example.go
 |---|---:|---|
 | `DPI` | `300` | Resolution from 1 to 1200 DPI |
 | `MaxPages` | `0` | Maximum pages to render; `0` permits unlimited pages |
+| `MaxPDFBytes` | `134217728` | Maximum PDF input size; `0` permits unlimited bytes |
+| `MaxPageWidth` | `20000` | Maximum rendered page width in pixels; `0` permits unlimited width |
+| `MaxPageHeight` | `20000` | Maximum rendered page height in pixels; `0` permits unlimited height |
+| `MaxPagePixels` | `200000000` | Maximum pixels in one page; `0` permits unlimited pixels |
+| `MaxDocumentPixels` | `1000000000` | Maximum pixels across all pages; `0` permits unlimited pixels |
+| `MaxOOXMLMembers` | `10000` | Maximum ZIP members in modern Office input; `0` permits unlimited members |
+| `MaxOOXMLMemberBytes` | `268435456` | Maximum uncompressed bytes in one OOXML member; `0` permits unlimited bytes |
+| `MaxOOXMLTotalBytes` | `1073741824` | Maximum total uncompressed OOXML bytes; `0` permits unlimited bytes |
 | `ImageFormat` | `png` | `png` or `jpeg` |
 | `JPEGQuality` | `90` | JPEG quality from 1 to 100 |
 | `TransparentBackground` | `false` | Preserve a transparent PDF page background in PNG |
@@ -282,14 +290,18 @@ pages, err := renderer.PageCount(ctx, "report.docx")
 | Field | Default | Description |
 |---|---:|---|
 | `MaxCharacters` | `0` | Maximum extracted Unicode characters; `0` permits unlimited characters |
+| `MaxPDFBytes` | `134217728` | Maximum PDF input size for page counting or extraction; `0` permits unlimited bytes |
+| `MaxOOXMLMembers` | `10000` | Maximum ZIP members in OOXML input; `0` permits unlimited members |
+| `MaxOOXMLMemberBytes` | `268435456` | Maximum uncompressed bytes in one OOXML member; `0` permits unlimited bytes |
+| `MaxOOXMLTotalBytes` | `1073741824` | Maximum total uncompressed OOXML bytes; `0` permits unlimited bytes |
 | `LibreOfficeTimeout` | `120s` | Legacy Office conversion timeout; `0` permits unlimited time |
 | `LibreOfficeExecutable` | auto-detected | Explicit LibreOffice executable path |
 
-`MaxCharacters` counts the Unicode characters in all extracted parts. Extractions that exceed the limit fail with `CharacterLimitExceededError`; no partial result is returned. `ExtractResult.Parts` preserves document order. `ExtractResult.Part(n)` finds a part by its one-based number, and `ExtractResult.Text()` joins all parts with a blank line without writing a file.
+`MaxCharacters` counts Unicode characters while output is built and stops extraction as soon as the limit is exceeded. No partial result is returned. PPTX order is resolved from `presentation.xml` relationships rather than slide filenames; hidden slides remain included in that order, while orphan slide parts are excluded. DOCX and PPTX runs within a paragraph are concatenated, paragraph boundaries become newlines, and explicit breaks and tabs are preserved.
 
 ## Errors and cancellation
 
-`RenderDocument` and `ExtractDocument` accept a `context.Context`. Cancellation stops an active LibreOffice conversion and is observed between PDF pages. Callers can use `errors.As` with these public error types:
+`RenderDocument`, `PageCount`, and extraction APIs accept a `context.Context`. Cancellation stops an active LibreOffice conversion and interrupts in-flight PDFium WebAssembly execution. Callers can use `errors.As` with these public error types:
 
 - `UnsupportedFormatError`
 - `DependencyNotFoundError`
@@ -298,7 +310,13 @@ pages, err := renderer.PageCount(ctx, "report.docx")
 - `DocumentRenderError`
 - `DocumentExtractionError`
 - `PageLimitExceededError`
+- `PageSizeLimitExceededError`
+- `DocumentPixelLimitExceededError`
+- `PDFSizeLimitExceededError`
 - `CharacterLimitExceededError`
+- `OOXMLLimitExceededError`
+
+PDFium's current Go API requires a contiguous byte slice, so PDF input is held in memory while PDFium uses it. `MaxPDFBytes` bounds that allocation by checking the file size before reading and enforcing the same limit during a context-aware read. PNG and JPEG output is encoded through a context-aware writer into a temporary file; cancellation prevents a partial file from replacing the destination. Cancellation is observed at encoder writes, so CPU work between writes cannot be preempted by the standard-library encoders.
 
 `DocumentConversionError` retains LibreOffice standard output and standard error for diagnostics. Input-validation and filesystem errors may be returned directly.
 

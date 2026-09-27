@@ -149,6 +149,14 @@ func (ExtractOptions) Validate() error
 |---|---:|---|
 | `DPI` | `300` | Rendering resolution from 1 through 1200 DPI |
 | `MaxPages` | `0` | Maximum pages to render; `0` permits unlimited pages |
+| `MaxPDFBytes` | `134217728` | Maximum PDF input bytes; `0` permits unlimited bytes |
+| `MaxPageWidth` | `20000` | Maximum rendered page width; `0` permits unlimited width |
+| `MaxPageHeight` | `20000` | Maximum rendered page height; `0` permits unlimited height |
+| `MaxPagePixels` | `200000000` | Maximum pixels per page; `0` permits unlimited pixels |
+| `MaxDocumentPixels` | `1000000000` | Maximum pixels across the document; `0` permits unlimited pixels |
+| `MaxOOXMLMembers` | `10000` | Maximum OOXML ZIP members; `0` permits unlimited members |
+| `MaxOOXMLMemberBytes` | `268435456` | Maximum uncompressed bytes per member; `0` permits unlimited bytes |
+| `MaxOOXMLTotalBytes` | `1073741824` | Maximum total uncompressed bytes; `0` permits unlimited bytes |
 | `ImageFormat` | `ImageFormatPNG` | PNG or JPEG output encoding |
 | `JPEGQuality` | `90` | Value from 1 through 100; validated even for PNG output |
 | `TransparentBackground` | `false` | Preserve PDF page alpha for PNG output |
@@ -163,6 +171,10 @@ JPEG has no alpha channel, so combining `ImageFormatJPEG` with `TransparentBackg
 | `ExtractOptions` field | Default | Constraint and meaning |
 |---|---:|---|
 | `MaxCharacters` | `0` | Maximum Unicode characters across all extracted parts; `0` permits unlimited text |
+| `MaxPDFBytes` | `134217728` | Maximum PDF bytes for page counting or extraction; `0` permits unlimited bytes |
+| `MaxOOXMLMembers` | `10000` | Maximum OOXML ZIP members; `0` permits unlimited members |
+| `MaxOOXMLMemberBytes` | `268435456` | Maximum uncompressed bytes per member; `0` permits unlimited bytes |
+| `MaxOOXMLTotalBytes` | `1073741824` | Maximum total uncompressed bytes; `0` permits unlimited bytes |
 | `LibreOfficeTimeout` | `120s` | Timeout for a legacy Office conversion; `0` permits no timeout |
 | `LibreOfficeExecutable` | Auto-detected | Explicit LibreOffice executable when provided |
 
@@ -211,7 +223,11 @@ Callers can use `errors.As` for the following public error types:
 | `UnsupportedFormatError` | Unsupported input extension |
 | `DependencyNotFoundError` | LibreOffice cannot be resolved for an operation that requires it |
 | `PageLimitExceededError` | The document page count exceeds `RenderOptions.MaxPages` |
+| `PageSizeLimitExceededError` | A rendered page exceeds a dimension or per-page pixel limit |
+| `DocumentPixelLimitExceededError` | Rendered pages exceed the total pixel limit |
+| `PDFSizeLimitExceededError` | PDF input exceeds the configured byte limit |
 | `CharacterLimitExceededError` | Extracted text exceeds `ExtractOptions.MaxCharacters` |
+| `OOXMLLimitExceededError` | OOXML member count or expanded byte limits are exceeded |
 | `DocumentConversionError` | Office conversion or temporary conversion setup fails; includes `Path`, `Stdout`, `Stderr`, and an unwrapped cause |
 | `DocumentPageCountError` | PDF page counting fails; includes `Path` and an unwrapped cause |
 | `DocumentRenderError` | PDF rasterization or image writing fails; includes `Path` and an unwrapped cause |
@@ -272,22 +288,24 @@ PPTX normalization applies only to preset shapes whose type is `line`. For each 
 
 XLSX and XLSM settings are applied to `xl/worksheets/sheet*.xml`. Missing `sheetPr`, `pageSetUpPr`, and `pageSetup` elements are added while respecting the relevant OOXML element ordering.
 
-If OOXML ZIP processing or XML parsing fails, the preprocessing error is not exposed separately. Instead, the original source is passed to LibreOffice so that the actual layout engine determines whether conversion is possible and provides the final diagnostic. Rewriting reconstructs ZIP members in a temporary file and never writes back to the source.
+OOXML member count and declared uncompressed sizes are checked before expansion. Every member is also read through byte-counting limits, so incorrect ZIP metadata cannot bypass per-member or total limits. A limit or archive error stops conversion rather than passing an unchecked source to LibreOffice. Rewriting reconstructs ZIP members in a temporary file and never writes back to the source.
 
 ## PDF Rendering
 
 PDF rendering uses the `go-pdfium` WebAssembly backend running on wazero. It therefore requires neither CGO, an operating-system PDF package, nor an external PDF renderer process.
 
-Each PDF rendering or extraction call initializes a dedicated PDFium pool with a minimum and maximum of one instance. Rendering and extraction share the same internal PDF lifecycle helper. The complete PDF is read into memory, opened by PDFium, and queried for its page count. The pool, instance, and document are always closed when the call ends.
+Each PDF rendering or extraction call initializes a dedicated PDFium pool with a minimum and maximum of one instance. Rendering and extraction share the same internal PDF lifecycle helper. The go-pdfium API requires a contiguous byte slice, so the PDF is held in memory while open. Its size is checked before allocation and the context-aware read is independently capped by `MaxPDFBytes`. The pool, instance, and document are always closed when the call ends.
 
-Pages are processed sequentially from the zero-based PDFium index and exposed as one-based page numbers. Context cancellation is checked between pages. Pages are not rendered concurrently, which keeps output order and the number of live page bitmaps predictable.
+Pages are processed sequentially from the zero-based PDFium index and exposed as one-based page numbers. The wazero runtime enables close-on-context-done with PDFium's required core features. A cancellation watcher kills the active PDFium instance, waits for its termination before returning, and then closes the pool. Pages are not rendered concurrently, which keeps output order and the number of live page bitmaps predictable.
+
+Page width and height are obtained before bitmap creation for both transparent and opaque rendering. Dimension, per-page pixel, and cumulative document pixel limits are checked with overflow-safe arithmetic before rendering or encoding.
 
 ### Background handling
 
 - Default rendering uses PDFium's DPI rendering API with form rendering enabled, then composites the result onto an opaque white background.
 - Transparent PNG rendering creates an alpha-enabled PDFium bitmap, initializes it as transparent, and renders annotations into it. The WASM buffer is copied into a Go byte slice so that the Go image remains valid after the PDFium bitmap is destroyed.
 
-Transparency is accepted only for PNG output. Encoding uses the Go standard library's `image/png` and `image/jpeg` packages.
+Transparency is accepted only for PNG output. Encoding uses the Go standard library's `image/png` and `image/jpeg` packages through a context-aware writer. Images are encoded to a temporary file in the destination directory and renamed only after successful completion, so cancellation or encoding failure does not publish a partial image.
 
 ## Output Contract
 
@@ -315,7 +333,11 @@ Public error types correspond to processing boundaries so callers can distinguis
 | `UnsupportedFormatError` | The input extension is unsupported | Extension and absolute input path |
 | `DependencyNotFoundError` | LibreOffice cannot be resolved for Office input | Dependency name and required operation |
 | `PageLimitExceededError` | The rendered page count exceeds `RenderOptions.MaxPages` | Actual page count and configured limit |
+| `PageSizeLimitExceededError` | A page exceeds a dimension or per-page pixel limit | Page number, dimensions, pixels, and configured limit |
+| `DocumentPixelLimitExceededError` | Cumulative rendered pixels exceed the document limit | Pixel count and configured limit |
+| `PDFSizeLimitExceededError` | PDF input exceeds its byte limit | Observed bytes and configured limit |
 | `CharacterLimitExceededError` | Extracted text exceeds `ExtractOptions.MaxCharacters` | Actual Unicode character count and configured limit |
+| `OOXMLLimitExceededError` | An OOXML archive exceeds a member count or expanded-byte limit | Limit kind, member when applicable, observed value, and limit |
 | `DocumentConversionError` | Temporary workspace setup, LibreOffice execution, timeout, or missing conversion output fails | Input path, underlying cause, and LibreOffice standard output and standard error |
 | `DocumentPageCountError` | PDF page counting fails | Input path and underlying cause |
 | `DocumentRenderError` | PDF reading, PDFium initialization, document opening, page rendering, image saving, or cancellation during rendering fails | PDF path, operation including the page number when applicable, and underlying cause |
@@ -327,13 +349,15 @@ For Office input, a rendering error references the temporary PDF path. `RenderRe
 
 ## Cancellation, Concurrency, and Resource Management
 
-The `context.Context` is passed to LibreOffice process execution and PDFium instance acquisition and is checked between PDF pages. It does not interrupt a single page render or Go image encoding after that operation has begun.
+The `context.Context` is passed to LibreOffice and the PDFium WebAssembly runtime. Cancellation interrupts in-flight PDFium calls and waits for instance termination. PDF reading and PNG/JPEG writes also check the context. Standard-library encoder CPU work between writes cannot be preempted, so cancellation may be observed at the next output write rather than at the exact cancellation instant.
 
 Each call owns an independent LibreOffice profile and PDFium pool, so separate calls can run concurrently when they use different output destinations. The library does not coordinate calls that share the same output directory and prefix, and it does not guarantee the result of concurrent writes to the same filename.
 
-The complete PDF byte stream is held in memory. During rendering, at least the PDFium-side and Go-side page bitmaps are also present; opaque rendering additionally allocates the white compositing image. An RGBA bitmap requires approximately four bytes per pixel. PDFium WebAssembly uses 32-bit linear memory, so high DPI values or very large pages can reach its memory limit.
+The complete PDF byte stream is held in memory because go-pdfium does not expose PDFium's random-access custom document loader. The default 128 MiB `MaxPDFBytes` bounds this allocation; setting it to zero restores unlimited behavior. During rendering, at least the PDFium-side and Go-side page bitmaps are also present; opaque rendering additionally allocates the white compositing image. An RGBA bitmap requires approximately four bytes per pixel.
 
-The library does not impose default limits on page count, expanded document size, total pixel count, or total output size. Callers can set `RenderOptions.MaxPages`; services that process untrusted documents must also enforce process-level CPU, memory, file-size, storage, and concurrency limits in addition to context deadlines.
+The library leaves page count, extracted character count, and final encoded output size unlimited by default. It does impose default OOXML expansion and PDF pixel limits. Services that process untrusted documents should set `MaxPages` and `MaxCharacters` and retain process-level CPU, memory, compressed-input-size, storage, and concurrency limits in addition to context deadlines.
+
+DOCX and PPTX text extraction concatenates text runs within a paragraph and preserves paragraph boundaries, explicit breaks, and tabs. PPTX slide order follows `p:sldIdLst` and its relationships. Hidden slides are included in that list order; orphan slide parts are ignored. Workbook rows and XML tokens consume the shared character budget while extraction is in progress.
 
 ## Security
 

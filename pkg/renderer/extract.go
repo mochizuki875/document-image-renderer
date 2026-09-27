@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"unicode/utf8"
 )
 
 // ExtractDocument extracts text from each document unit in source order.
@@ -28,17 +27,18 @@ func ExtractDocumentWithOptions(ctx context.Context, source string, options *Ext
 		return nil, err
 	}
 	var parts []TextPart
+	budget := &characterBudget{max: extractOptions.MaxCharacters}
 	switch extension {
 	case ".pdf":
-		parts, err = extractPDFText(ctx, sourcePath)
+		parts, err = extractPDFText(ctx, sourcePath, extractOptions.MaxPDFBytes, budget)
 	case ".docx":
-		parts, err = extractDOCXText(sourcePath)
+		parts, err = extractDOCXText(sourcePath, extractOptions, budget)
 	case ".pptx":
-		parts, err = extractPPTXText(sourcePath)
+		parts, err = extractPPTXText(sourcePath, extractOptions, budget)
 	case ".xlsx", ".xlsm":
-		parts, err = extractWorkbookText(sourcePath)
+		parts, err = extractWorkbookText(sourcePath, extractOptions, budget)
 	case ".doc", ".ppt", ".xls":
-		parts, err = extractLegacyOfficeText(ctx, sourcePath, extension, extractOptions)
+		parts, err = extractLegacyOfficeText(ctx, sourcePath, extension, extractOptions, budget)
 	default:
 		return &ExtractResult{Source: sourcePath}, nil
 	}
@@ -49,31 +49,12 @@ func ExtractDocumentWithOptions(ctx context.Context, source string, options *Ext
 		}
 		return nil, &DocumentExtractionError{Path: sourcePath, Err: err}
 	}
-	if err := validateCharacterLimit(parts, extractOptions.MaxCharacters); err != nil {
-		return nil, &DocumentExtractionError{Path: sourcePath, Err: err}
-	}
 	return &ExtractResult{Source: sourcePath, Parts: parts}, nil
-}
-
-// validateCharacterLimit enforces the configured maximum on the total number
-// of extracted characters. A limit of zero means no limit.
-func validateCharacterLimit(parts []TextPart, maxCharacters int) error {
-	if maxCharacters == 0 {
-		return nil
-	}
-	characterCount := 0
-	for _, part := range parts {
-		characterCount += utf8.RuneCountInString(part.Text)
-	}
-	if characterCount > maxCharacters {
-		return &CharacterLimitExceededError{CharacterCount: characterCount, MaxCharacters: maxCharacters}
-	}
-	return nil
 }
 
 // extractLegacyOfficeText converts a legacy binary Office document to OOXML
 // and then reuses the corresponding OOXML extractor on the converted file.
-func extractLegacyOfficeText(ctx context.Context, source, extension string, options ExtractOptions) ([]TextPart, error) {
+func extractLegacyOfficeText(ctx context.Context, source, extension string, options ExtractOptions, budget *characterBudget) ([]TextPart, error) {
 	converted, cleanup, err := convertLegacyOfficeToOOXML(ctx, source, extension, libreOfficeConfig{
 		timeout: options.LibreOfficeTimeout, executable: options.LibreOfficeExecutable,
 	})
@@ -83,11 +64,11 @@ func extractLegacyOfficeText(ctx context.Context, source, extension string, opti
 	defer cleanup()
 	switch extension {
 	case ".doc":
-		return extractDOCXText(converted)
+		return extractDOCXText(converted, options, budget)
 	case ".ppt":
-		return extractPPTXText(converted)
+		return extractPPTXText(converted, options, budget)
 	case ".xls":
-		return extractWorkbookText(converted)
+		return extractWorkbookText(converted, options, budget)
 	default:
 		return nil, fmt.Errorf("unsupported legacy Office format: %s", extension)
 	}

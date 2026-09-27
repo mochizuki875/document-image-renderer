@@ -23,7 +23,16 @@ func Run(ctx context.Context, arguments []string, stdout, stderr io.Writer) int 
 	flags.SetOutput(stderr)
 	dpi := flags.Int("dpi", defaults.DPI, "rendering resolution")
 	maxPages := flags.Int("max-pages", defaults.MaxPages, "maximum pages to render (0 for unlimited)")
-	maxCharacters := flags.Int("max-characters", 0, "maximum characters to extract (0 for unlimited)")
+	maxPDFBytes := flags.Uint64("max-pdf-bytes", defaults.MaxPDFBytes, "maximum PDF input bytes (0 for unlimited)")
+	maxPageWidth := flags.Int("max-page-width", defaults.MaxPageWidth, "maximum rendered page width (0 for unlimited)")
+	maxPageHeight := flags.Int("max-page-height", defaults.MaxPageHeight, "maximum rendered page height (0 for unlimited)")
+	maxPagePixels := flags.Uint64("max-page-pixels", defaults.MaxPagePixels, "maximum pixels per page (0 for unlimited)")
+	maxDocumentPixels := flags.Uint64("max-document-pixels", defaults.MaxDocumentPixels, "maximum pixels across all pages (0 for unlimited)")
+	extractDefaults := renderer.DefaultExtractOptions()
+	maxCharacters := flags.Int("max-characters", extractDefaults.MaxCharacters, "maximum characters to extract (0 for unlimited)")
+	maxOOXMLMembers := flags.Int("max-ooxml-members", defaults.MaxOOXMLMembers, "maximum OOXML archive members (0 for unlimited)")
+	maxOOXMLMemberBytes := flags.Uint64("max-ooxml-member-bytes", defaults.MaxOOXMLMemberBytes, "maximum uncompressed bytes per OOXML member (0 for unlimited)")
+	maxOOXMLTotalBytes := flags.Uint64("max-ooxml-total-bytes", defaults.MaxOOXMLTotalBytes, "maximum total uncompressed OOXML bytes (0 for unlimited)")
 	imageFormat := flags.String("format", string(defaults.ImageFormat), "output format: png or jpeg")
 	jpegQuality := flags.Int("jpeg-quality", defaults.JPEGQuality, "JPEG quality from 1 to 100")
 	prefix := flags.String("prefix", "", "output file name prefix")
@@ -46,21 +55,31 @@ func Run(ctx context.Context, arguments []string, stdout, stderr io.Writer) int 
 		return 2
 	}
 
-	options := renderer.RenderOptions{
-		DPI:                   *dpi,
-		MaxPages:              *maxPages,
-		ImageFormat:           renderer.ImageFormat(*imageFormat),
-		JPEGQuality:           *jpegQuality,
-		TransparentBackground: *transparent,
-		FilenamePrefix:        *prefix,
-		LibreOfficeTimeout:    time.Duration(*timeout * float64(time.Second)),
-		LibreOfficeExecutable: *libreOffice,
-	}
-	extractOptions := renderer.ExtractOptions{
-		MaxCharacters:         *maxCharacters,
-		LibreOfficeTimeout:    options.LibreOfficeTimeout,
-		LibreOfficeExecutable: options.LibreOfficeExecutable,
-	}
+	options := defaults
+	options.DPI = *dpi
+	options.MaxPages = *maxPages
+	options.MaxPDFBytes = *maxPDFBytes
+	options.MaxPageWidth = *maxPageWidth
+	options.MaxPageHeight = *maxPageHeight
+	options.MaxPagePixels = *maxPagePixels
+	options.MaxDocumentPixels = *maxDocumentPixels
+	options.MaxOOXMLMembers = *maxOOXMLMembers
+	options.MaxOOXMLMemberBytes = *maxOOXMLMemberBytes
+	options.MaxOOXMLTotalBytes = *maxOOXMLTotalBytes
+	options.ImageFormat = renderer.ImageFormat(*imageFormat)
+	options.JPEGQuality = *jpegQuality
+	options.TransparentBackground = *transparent
+	options.FilenamePrefix = *prefix
+	options.LibreOfficeTimeout = time.Duration(*timeout * float64(time.Second))
+	options.LibreOfficeExecutable = *libreOffice
+	extractOptions := extractDefaults
+	extractOptions.MaxCharacters = *maxCharacters
+	extractOptions.MaxPDFBytes = *maxPDFBytes
+	extractOptions.MaxOOXMLMembers = *maxOOXMLMembers
+	extractOptions.MaxOOXMLMemberBytes = *maxOOXMLMemberBytes
+	extractOptions.MaxOOXMLTotalBytes = *maxOOXMLTotalBytes
+	extractOptions.LibreOfficeTimeout = options.LibreOfficeTimeout
+	extractOptions.LibreOfficeExecutable = options.LibreOfficeExecutable
 	if err := extractOptions.Validate(); err != nil {
 		fmt.Fprintf(stderr, "error: %v\n", err)
 		return 1

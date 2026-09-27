@@ -20,6 +20,14 @@ const (
 type RenderOptions struct {
 	DPI                   int
 	MaxPages              int
+	MaxPDFBytes           uint64
+	MaxPageWidth          int
+	MaxPageHeight         int
+	MaxPagePixels         uint64
+	MaxDocumentPixels     uint64
+	MaxOOXMLMembers       int
+	MaxOOXMLMemberBytes   uint64
+	MaxOOXMLTotalBytes    uint64
 	ImageFormat           ImageFormat
 	JPEGQuality           int
 	TransparentBackground bool
@@ -32,6 +40,10 @@ type RenderOptions struct {
 // The zero value is not usable; call DefaultExtractOptions and override fields.
 type ExtractOptions struct {
 	MaxCharacters         int
+	MaxPDFBytes           uint64
+	MaxOOXMLMembers       int
+	MaxOOXMLMemberBytes   uint64
+	MaxOOXMLTotalBytes    uint64
 	LibreOfficeTimeout    time.Duration
 	LibreOfficeExecutable string
 }
@@ -39,13 +51,22 @@ type ExtractOptions struct {
 // DefaultExtractOptions returns the default extraction configuration.
 // MaxCharacters is zero, meaning no character limit.
 func DefaultExtractOptions() ExtractOptions {
-	return ExtractOptions{LibreOfficeTimeout: 120 * time.Second}
+	return ExtractOptions{
+		MaxPDFBytes:         128 << 20,
+		MaxOOXMLMembers:     10_000,
+		MaxOOXMLMemberBytes: 256 << 20,
+		MaxOOXMLTotalBytes:  1 << 30,
+		LibreOfficeTimeout:  120 * time.Second,
+	}
 }
 
 // Validate checks whether all extraction option values are valid.
 func (options ExtractOptions) Validate() error {
 	if options.MaxCharacters < 0 {
 		return fmt.Errorf("max characters must not be negative")
+	}
+	if options.MaxOOXMLMembers < 0 {
+		return fmt.Errorf("max OOXML members must not be negative")
 	}
 	if options.LibreOfficeTimeout < 0 {
 		return fmt.Errorf("libreoffice timeout must not be negative")
@@ -57,10 +78,18 @@ func (options ExtractOptions) Validate() error {
 // MaxPages is zero, meaning no page limit, and the background is opaque.
 func DefaultRenderOptions() RenderOptions {
 	return RenderOptions{
-		DPI:                300,
-		ImageFormat:        ImageFormatPNG,
-		JPEGQuality:        90,
-		LibreOfficeTimeout: 120 * time.Second,
+		DPI:                 300,
+		MaxPDFBytes:         128 << 20,
+		MaxPageWidth:        20_000,
+		MaxPageHeight:       20_000,
+		MaxPagePixels:       200_000_000,
+		MaxDocumentPixels:   1_000_000_000,
+		MaxOOXMLMembers:     10_000,
+		MaxOOXMLMemberBytes: 256 << 20,
+		MaxOOXMLTotalBytes:  1 << 30,
+		ImageFormat:         ImageFormatPNG,
+		JPEGQuality:         90,
+		LibreOfficeTimeout:  120 * time.Second,
 	}
 }
 
@@ -71,6 +100,12 @@ func (options RenderOptions) Validate() error {
 	}
 	if options.MaxPages < 0 {
 		return fmt.Errorf("max pages must not be negative")
+	}
+	if options.MaxPageWidth < 0 || options.MaxPageHeight < 0 {
+		return fmt.Errorf("maximum page dimensions must not be negative")
+	}
+	if options.MaxOOXMLMembers < 0 {
+		return fmt.Errorf("max OOXML members must not be negative")
 	}
 	if options.ImageFormat != ImageFormatPNG && options.ImageFormat != ImageFormatJPEG {
 		return fmt.Errorf("image format must be %q or %q", ImageFormatPNG, ImageFormatJPEG)

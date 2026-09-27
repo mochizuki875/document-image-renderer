@@ -12,9 +12,7 @@ import (
 
 func TestConvertOfficeUsesIsolatedProfile(t *testing.T) {
 	source := filepath.Join(t.TempDir(), "input.docx")
-	if err := os.WriteFile(source, []byte("placeholder"), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	copyFixture(t, fixturePath("samplefile.docx"), source)
 	replaceLibreOfficeFunctions(t)
 	findExecutable = func(string) (string, error) { return "/usr/bin/libreoffice", nil }
 	executeLibreOffice = func(_ context.Context, executable string, arguments []string) (string, string, error) {
@@ -49,9 +47,7 @@ func TestConvertOfficeUsesIsolatedProfile(t *testing.T) {
 
 func TestPageCountConvertsOfficeDocument(t *testing.T) {
 	source := filepath.Join(t.TempDir(), "input.docx")
-	if err := os.WriteFile(source, []byte("placeholder"), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	copyFixture(t, fixturePath("samplefile.docx"), source)
 	replaceLibreOfficeFunctions(t)
 	findExecutable = func(string) (string, error) { return "/usr/bin/libreoffice", nil }
 	executeLibreOffice = func(_ context.Context, executable string, arguments []string) (string, string, error) {
@@ -74,9 +70,7 @@ func TestPageCountConvertsOfficeDocument(t *testing.T) {
 
 func TestConvertOfficeAllowsUnlimitedTimeout(t *testing.T) {
 	source := filepath.Join(t.TempDir(), "input.docx")
-	if err := os.WriteFile(source, []byte("placeholder"), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	copyFixture(t, fixturePath("samplefile.docx"), source)
 	replaceLibreOfficeFunctions(t)
 	findExecutable = func(string) (string, error) { return "/usr/bin/libreoffice", nil }
 	executeLibreOffice = func(ctx context.Context, _ string, arguments []string) (string, string, error) {

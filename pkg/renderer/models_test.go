@@ -10,6 +10,9 @@ func TestDefaultRenderOptionsAreValid(t *testing.T) {
 	if options.DPI != 300 || options.ImageFormat != ImageFormatPNG || options.JPEGQuality != 90 {
 		t.Fatalf("unexpected defaults: %+v", options)
 	}
+	if options.MaxPDFBytes == 0 {
+		t.Fatal("default PDF byte limit must be finite")
+	}
 }
 
 func TestDefaultExtractOptionsAreValid(t *testing.T) {
@@ -19,6 +22,9 @@ func TestDefaultExtractOptionsAreValid(t *testing.T) {
 	}
 	if options.LibreOfficeTimeout <= 0 {
 		t.Fatalf("unexpected defaults: %+v", options)
+	}
+	if options.MaxPDFBytes == 0 {
+		t.Fatal("default PDF byte limit must be finite")
 	}
 }
 

@@ -48,8 +48,12 @@ func PageCountWithOptions(ctx context.Context, source string, options *ExtractOp
 	cleanup := func() {}
 	if extension != ".pdf" {
 		pdfPath, cleanup, err = convertOfficeToPDF(ctx, sourcePath, extension, RenderOptions{
+			MaxPDFBytes:           extractOptions.MaxPDFBytes,
 			LibreOfficeTimeout:    extractOptions.LibreOfficeTimeout,
 			LibreOfficeExecutable: extractOptions.LibreOfficeExecutable,
+			MaxOOXMLMembers:       extractOptions.MaxOOXMLMembers,
+			MaxOOXMLMemberBytes:   extractOptions.MaxOOXMLMemberBytes,
+			MaxOOXMLTotalBytes:    extractOptions.MaxOOXMLTotalBytes,
 		})
 		if err != nil {
 			return 0, err
@@ -57,7 +61,7 @@ func PageCountWithOptions(ctx context.Context, source string, options *ExtractOp
 		defer cleanup()
 	}
 
-	pageCount, err := pdfPageCount(ctx, pdfPath)
+	pageCount, err := pdfPageCount(ctx, pdfPath, extractOptions.MaxPDFBytes)
 	if err != nil {
 		return 0, &DocumentPageCountError{Path: sourcePath, Err: err}
 	}
@@ -121,6 +125,9 @@ func RenderDocument(
 func validateDocument(ctx context.Context, source string) (string, string, error) {
 	if ctx == nil {
 		return "", "", fmt.Errorf("context must not be nil")
+	}
+	if err := ctx.Err(); err != nil {
+		return "", "", err
 	}
 	sourcePath, err := filepath.Abs(source)
 	if err != nil {

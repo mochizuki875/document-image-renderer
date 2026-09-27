@@ -2,7 +2,6 @@ package renderer
 
 import (
 	"archive/zip"
-	"io"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -15,23 +14,26 @@ import (
 // LibreOffice produces predictable output. PPTX shapes with negative extents
 // are normalized and worksheets are forced to fit a single page. On any error
 // the original source is returned so conversion can still proceed.
-func prepareOfficeSource(source, extension, workingDirectory string) string {
+func prepareOfficeSource(source, extension, workingDirectory string, limits ooxmlLimits) (string, error) {
 	var (
 		prepared string
 		err      error
 	)
 	switch extension {
 	case ".pptx":
-		prepared, err = rewriteOOXML(source, workingDirectory, true, normalizePPTXPart)
+		prepared, err = rewriteOOXML(source, workingDirectory, true, normalizePPTXPart, limits)
 	case ".xlsx", ".xlsm":
-		prepared, err = rewriteOOXML(source, workingDirectory, false, fitWorksheetPart)
+		prepared, err = rewriteOOXML(source, workingDirectory, false, fitWorksheetPart, limits)
+	case ".docx":
+		err = validateOOXMLArchive(source, limits)
+		prepared = source
 	default:
-		return source
+		return source, nil
 	}
 	if err != nil {
-		return source
+		return "", err
 	}
-	return prepared
+	return prepared, nil
 }
 
 // ooxmlTransform rewrites a single archive member. The bool reports whether
@@ -46,12 +48,16 @@ func rewriteOOXML(
 	workingDirectory string,
 	onlyWhenChanged bool,
 	transform ooxmlTransform,
+	limits ooxmlLimits,
 ) (string, error) {
 	archive, err := zip.OpenReader(source)
 	if err != nil {
 		return "", err
 	}
 	defer archive.Close()
+	if err := checkOOXMLHeaders(archive.File, limits); err != nil {
+		return "", err
+	}
 
 	preparedPath := filepath.Join(workingDirectory, filepath.Base(source))
 	output, err := os.Create(preparedPath)
@@ -68,18 +74,11 @@ func rewriteOOXML(
 	}
 
 	changed := false
+	var total uint64
 	for _, member := range archive.File {
-		input, err := member.Open()
+		data, err := readLimitedOOXMLMember(member, &total, limits)
 		if err != nil {
 			return fail(err)
-		}
-		data, err := io.ReadAll(input)
-		closeErr := input.Close()
-		if err != nil {
-			return fail(err)
-		}
-		if closeErr != nil {
-			return fail(closeErr)
 		}
 		data, memberChanged, err := transform(member.Name, data)
 		if err != nil {

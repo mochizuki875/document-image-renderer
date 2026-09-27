@@ -55,7 +55,7 @@ func convertOfficeToPDF(
 ) (string, func(), error) {
 	return convertOffice(ctx, source, extension, officeConversion{
 		targetExtension: ".pdf", filter: pdfConversionFilter(extension), prepareSource: true,
-	}, libreOfficeConfig{timeout: options.LibreOfficeTimeout, executable: options.LibreOfficeExecutable})
+	}, libreOfficeConfig{timeout: options.LibreOfficeTimeout, executable: options.LibreOfficeExecutable}, renderOOXMLLimits(options))
 }
 
 // pdfConversionFilter selects the LibreOffice export filter for the format.
@@ -89,7 +89,7 @@ func convertLegacyOfficeToOOXML(
 	}
 	return convertOffice(ctx, source, extension, officeConversion{
 		targetExtension: targetExtension, filter: strings.TrimPrefix(targetExtension, "."),
-	}, config)
+	}, config, ooxmlLimits{})
 }
 
 type officeConversion struct {
@@ -108,6 +108,7 @@ func convertOffice(
 	extension string,
 	conversion officeConversion,
 	config libreOfficeConfig,
+	limits ooxmlLimits,
 ) (string, func(), error) {
 	executable := config.executable
 	if executable == "" {
@@ -152,7 +153,10 @@ func convertOffice(
 	// Some formats need a rewritten copy before conversion (see prepareOfficeSource).
 	conversionSource := source
 	if conversion.prepareSource {
-		conversionSource = prepareOfficeSource(source, extension, workingDirectory)
+		conversionSource, err = prepareOfficeSource(source, extension, workingDirectory, limits)
+		if err != nil {
+			return fail(err, "", "")
+		}
 	}
 	profileURL := (&url.URL{Scheme: "file", Path: filepath.ToSlash(profileDirectory)}).String()
 	arguments := []string{
