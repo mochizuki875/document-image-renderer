@@ -19,7 +19,6 @@ import (
 	"github.com/klippa-app/go-pdfium/enums"
 	"github.com/klippa-app/go-pdfium/references"
 	"github.com/klippa-app/go-pdfium/requests"
-	"github.com/klippa-app/go-pdfium/responses"
 	"github.com/klippa-app/go-pdfium/webassembly"
 	"github.com/tetratelabs/wazero"
 	wazeroapi "github.com/tetratelabs/wazero/api"
@@ -51,21 +50,22 @@ func renderPDF(
 				outputDirectory,
 				fmt.Sprintf("%s-page-%0*d.%s", prefix, pageDigits, pageIndex+1, imageExtension(options.ImageFormat)),
 			)
-			size, pixels, err := checkedPageSize(instance, document, pageIndex, options)
+			plan, err := checkedPageRenderPlan(instance, document, pageIndex, options)
 			if err != nil {
 				return nil, err
 			}
-			if documentPixels > math.MaxUint64-pixels {
+			if documentPixels > math.MaxUint64-plan.OutputPixels {
 				return nil, &DocumentPixelLimitExceededError{Pixels: math.MaxUint64, MaxPixels: options.MaxDocumentPixels}
 			}
-			if options.MaxDocumentPixels > 0 && (documentPixels > options.MaxDocumentPixels || pixels > options.MaxDocumentPixels-documentPixels) {
-				return nil, &DocumentPixelLimitExceededError{Pixels: documentPixels + pixels, MaxPixels: options.MaxDocumentPixels}
+			if options.MaxDocumentPixels > 0 && (documentPixels > options.MaxDocumentPixels || plan.OutputPixels > options.MaxDocumentPixels-documentPixels) {
+				return nil, &DocumentPixelLimitExceededError{Pixels: documentPixels + plan.OutputPixels, MaxPixels: options.MaxDocumentPixels}
 			}
-			documentPixels += pixels
-			rendered, err := renderPage(ctx, instance, document, pageIndex, imagePath, size.Width, size.Height, options)
+			rendered, err := renderPage(ctx, instance, document, pageIndex, imagePath, plan, options)
 			if err != nil {
 				return nil, fmt.Errorf("page %d: %w", pageIndex+1, err)
 			}
+			renderedPixels := uint64(rendered.Width) * uint64(rendered.Height)
+			documentPixels += renderedPixels
 			images = append(images, rendered)
 		}
 		return images, nil
@@ -235,20 +235,62 @@ func (reader *contextReader) Read(buffer []byte) (int, error) {
 	return count, err
 }
 
-func checkedPageSize(instance pdfium.Pdfium, document references.FPDF_DOCUMENT, pageIndex int, options RenderOptions) (*responses.GetPageSizeInPixels, uint64, error) {
+type pageRenderPlan struct {
+	RequestedWidth  int
+	RequestedHeight int
+	OutputWidth     int
+	OutputHeight    int
+	OutputPixels    uint64
+	Scaled          bool
+}
+
+func buildPageRenderPlan(pageNumber, width, height int, options RenderOptions) (pageRenderPlan, error) {
+	if width <= 0 || height <= 0 {
+		return pageRenderPlan{}, fmt.Errorf("invalid page dimensions %dx%d", width, height)
+	}
+	outputWidth, outputHeight := targetPageDimensions(width, height, options.TargetPagePixels)
+	outputPixels, err := validatePageSize(pageNumber, outputWidth, outputHeight, options)
+	if err != nil {
+		return pageRenderPlan{}, err
+	}
+	return pageRenderPlan{
+		RequestedWidth:  width,
+		RequestedHeight: height,
+		OutputWidth:     outputWidth,
+		OutputHeight:    outputHeight,
+		OutputPixels:    outputPixels,
+		Scaled:          outputWidth < width || outputHeight < height,
+	}, nil
+}
+
+func targetPageDimensions(width, height int, targetPixels uint64) (int, int) {
+	if targetPixels == 0 || uint64(width) <= targetPixels/uint64(height) {
+		return width, height
+	}
+
+	scale := math.Sqrt(float64(targetPixels) / float64(width) / float64(height))
+	outputWidth := max(1, int(math.Floor(float64(width)*scale)))
+	outputHeight := max(1, int(math.Floor(float64(height)*scale)))
+
+	if uint64(outputWidth) > targetPixels/uint64(outputHeight) {
+		maximumWidth := targetPixels / uint64(outputHeight)
+		if maximumWidth > 0 {
+			outputWidth = min(outputWidth, int(maximumWidth))
+		} else {
+			outputWidth = 1
+			outputHeight = min(outputHeight, int(targetPixels))
+		}
+	}
+	return outputWidth, outputHeight
+}
+
+func checkedPageRenderPlan(instance pdfium.Pdfium, document references.FPDF_DOCUMENT, pageIndex int, options RenderOptions) (pageRenderPlan, error) {
 	page := requests.Page{ByIndex: &requests.PageByIndex{Document: document, Index: pageIndex}}
 	size, err := instance.GetPageSizeInPixels(&requests.GetPageSizeInPixels{Page: page, DPI: options.DPI})
 	if err != nil {
-		return nil, 0, err
+		return pageRenderPlan{}, err
 	}
-	if size.Width <= 0 || size.Height <= 0 {
-		return nil, 0, fmt.Errorf("invalid page dimensions %dx%d", size.Width, size.Height)
-	}
-	pixels, err := validatePageSize(pageIndex+1, size.Width, size.Height, options)
-	if err != nil {
-		return nil, 0, err
-	}
-	return size, pixels, nil
+	return buildPageRenderPlan(pageIndex+1, size.Width, size.Height, options)
 }
 
 func validatePageSize(pageNumber, width, height int, options RenderOptions) (uint64, error) {
@@ -277,18 +319,39 @@ func renderPage(
 	document references.FPDF_DOCUMENT,
 	pageIndex int,
 	imagePath string,
-	width int,
-	height int,
+	plan pageRenderPlan,
 	options RenderOptions,
 ) (RenderedImage, error) {
 	var renderedImage image.Image
 	cleanup := func() {}
 	if options.TransparentBackground {
 		var err error
-		renderedImage, err = renderTransparentPage(instance, document, pageIndex, width, height)
+		renderedImage, err = renderTransparentPage(instance, document, pageIndex, plan.OutputWidth, plan.OutputHeight)
 		if err != nil {
 			return RenderedImage{}, fmt.Errorf("render: %w", err)
 		}
+	} else if plan.Scaled {
+		page, err := instance.RenderPageInPixels(&requests.RenderPageInPixels{
+			Width:  plan.OutputWidth,
+			Height: plan.OutputHeight,
+			Page: requests.Page{ByIndex: &requests.PageByIndex{
+				Document: document,
+				Index:    pageIndex,
+			}},
+			Document:   &document,
+			RenderForm: true,
+		})
+		if page != nil {
+			cleanup = page.Cleanup
+		}
+		defer cleanup()
+		if err != nil {
+			return RenderedImage{}, fmt.Errorf("render: %w", err)
+		}
+		if page == nil || page.Result.Image == nil {
+			return RenderedImage{}, fmt.Errorf("render: PDFium returned no image")
+		}
+		renderedImage = compositeOnWhite(page.Result.Image)
 	} else {
 		page, err := instance.RenderPageInDPI(&requests.RenderPageInDPI{
 			DPI: options.DPI,
@@ -311,16 +374,41 @@ func renderPage(
 		}
 		renderedImage = compositeOnWhite(page.Result.Image)
 	}
+	width := renderedImage.Bounds().Dx()
+	height := renderedImage.Bounds().Dy()
+	if _, err := validateRenderedPageSize(pageIndex+1, plan, width, height, options); err != nil {
+		return RenderedImage{}, fmt.Errorf("render: %w", err)
+	}
 
 	if err := saveImage(ctx, imagePath, renderedImage, options); err != nil {
 		return RenderedImage{}, fmt.Errorf("save: %w", err)
 	}
 	return RenderedImage{
-		PageNumber: pageIndex + 1,
-		Path:       imagePath,
-		Width:      renderedImage.Bounds().Dx(),
-		Height:     renderedImage.Bounds().Dy(),
+		PageNumber:      pageIndex + 1,
+		Path:            imagePath,
+		RequestedWidth:  plan.RequestedWidth,
+		RequestedHeight: plan.RequestedHeight,
+		Width:           width,
+		Height:          height,
+		Scaled:          plan.Scaled,
 	}, nil
+}
+
+func validateRenderedPageSize(pageNumber int, plan pageRenderPlan, width, height int, options RenderOptions) (uint64, error) {
+	if width <= 0 || height <= 0 {
+		return 0, fmt.Errorf("PDFium returned invalid page dimensions %dx%d", width, height)
+	}
+	if width > plan.OutputWidth || height > plan.OutputHeight {
+		return 0, fmt.Errorf("PDFium returned page dimensions %dx%d exceeding planned dimensions %dx%d", width, height, plan.OutputWidth, plan.OutputHeight)
+	}
+	pixels, err := validatePageSize(pageNumber, width, height, options)
+	if err != nil {
+		return 0, err
+	}
+	if options.TargetPagePixels > 0 && pixels > options.TargetPagePixels {
+		return 0, fmt.Errorf("PDFium returned %d page pixels exceeding target %d", pixels, options.TargetPagePixels)
+	}
+	return pixels, nil
 }
 
 func imageExtension(format ImageFormat) string {

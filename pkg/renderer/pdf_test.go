@@ -124,6 +124,83 @@ func TestValidatePageSizeRejectsOverflowingPixels(t *testing.T) {
 	}
 }
 
+func TestBuildPageRenderPlan(t *testing.T) {
+	tests := []struct {
+		name         string
+		width        int
+		height       int
+		targetPixels uint64
+		wantWidth    int
+		wantHeight   int
+		wantScaled   bool
+	}{
+		{name: "disabled", width: 100, height: 50, targetPixels: 0, wantWidth: 100, wantHeight: 50},
+		{name: "below target", width: 100, height: 50, targetPixels: 5_001, wantWidth: 100, wantHeight: 50},
+		{name: "at target", width: 100, height: 50, targetPixels: 5_000, wantWidth: 100, wantHeight: 50},
+		{name: "scaled", width: 200, height: 100, targetPixels: 5_000, wantWidth: 100, wantHeight: 50, wantScaled: true},
+		{name: "one pixel", width: 20, height: 10, targetPixels: 1, wantWidth: 1, wantHeight: 1, wantScaled: true},
+		{name: "extreme landscape", width: math.MaxInt, height: 1, targetPixels: 100, wantWidth: 100, wantHeight: 1, wantScaled: true},
+		{name: "extreme portrait", width: 1, height: math.MaxInt, targetPixels: 100, wantWidth: 1, wantHeight: 100, wantScaled: true},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			options := DefaultRenderOptions()
+			options.MaxPageWidth = 0
+			options.MaxPageHeight = 0
+			options.MaxPagePixels = 0
+			options.TargetPagePixels = test.targetPixels
+			plan, err := buildPageRenderPlan(1, test.width, test.height, options)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if plan.OutputWidth != test.wantWidth || plan.OutputHeight != test.wantHeight || plan.Scaled != test.wantScaled {
+				t.Fatalf("plan = %+v, want output %dx%d scaled=%t", plan, test.wantWidth, test.wantHeight, test.wantScaled)
+			}
+			if test.targetPixels > 0 && plan.OutputPixels > test.targetPixels {
+				t.Fatalf("output pixels %d exceed target %d", plan.OutputPixels, test.targetPixels)
+			}
+		})
+	}
+}
+
+func TestBuildPageRenderPlanAppliesHardLimitsAfterTarget(t *testing.T) {
+	options := DefaultRenderOptions()
+	options.TargetPagePixels = 5_000
+	options.MaxPageWidth = 100
+	options.MaxPageHeight = 100
+	options.MaxPagePixels = 5_000
+
+	plan, err := buildPageRenderPlan(1, 200, 100, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.OutputWidth != 100 || plan.OutputHeight != 50 {
+		t.Fatalf("unexpected plan: %+v", plan)
+	}
+
+	options.MaxPageWidth = 99
+	if _, err := buildPageRenderPlan(1, 200, 100, options); err == nil {
+		t.Fatal("expected post-scaling width limit error")
+	}
+}
+
+func TestValidateRenderedPageSizeRejectsDimensionsBeyondPlan(t *testing.T) {
+	options := DefaultRenderOptions()
+	options.TargetPagePixels = 5_000
+	plan := pageRenderPlan{OutputWidth: 100, OutputHeight: 50, OutputPixels: 5_000, Scaled: true}
+
+	if _, err := validateRenderedPageSize(1, plan, 101, 50, options); err == nil {
+		t.Fatal("expected width beyond plan to be rejected")
+	}
+	if _, err := validateRenderedPageSize(1, plan, 100, 51, options); err == nil {
+		t.Fatal("expected height beyond plan to be rejected")
+	}
+	if pixels, err := validateRenderedPageSize(1, plan, 100, 50, options); err != nil || pixels != 5_000 {
+		t.Fatalf("planned dimensions rejected: pixels=%d error=%v", pixels, err)
+	}
+}
+
 func TestImageExtension(t *testing.T) {
 	if got := imageExtension(ImageFormatJPEG); got != "jpg" {
 		t.Fatalf("imageExtension(JPEG) = %q", got)

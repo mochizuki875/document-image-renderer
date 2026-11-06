@@ -32,9 +32,10 @@ flowchart TD
   validate --> render[Render document]
   validate --> extract[Extract text]
   render --> renderRoute{PDF or Office?}
-  renderRoute -->|PDF| pdfium[PDFium]
+  renderRoute -->|PDF| pagePlan[Build page render plan]
   renderRoute -->|Office| officePDF[Prepare when needed and convert with LibreOffice]
-  officePDF --> pdfium
+  officePDF --> pagePlan
+  pagePlan --> pdfium[PDFium]
   pdfium --> image[Sequential PNG or JPEG images]
   extract --> extractRoute{Format}
   extractRoute -->|PDF| pdfText[PDFium page text]
@@ -68,6 +69,7 @@ The primary rendering API is used as follows:
 ```go
 options := renderer.DefaultRenderOptions()
 options.DPI = 300
+options.TargetPagePixels = 80_000_000
 options.ImageFormat = renderer.ImageFormatPNG
 
 result, err := renderer.RenderDocument(
@@ -133,10 +135,11 @@ func (ExtractOptions) Validate() error
 | `LibreOfficeTimeout` | `120s` | Timeout for one Office conversion; `0` permits no timeout |
 | `MaxPages` | `0` | Maximum pages to render; `0` permits unlimited pages |
 | `MaxPDFBytes` | `134217728` | Maximum PDF input bytes; `0` permits unlimited bytes |
-| `MaxPageWidth` | `20000` | Maximum rendered page width; `0` permits unlimited width |
-| `MaxPageHeight` | `20000` | Maximum rendered page height; `0` permits unlimited height |
-| `MaxPagePixels` | `200000000` | Maximum pixels per page; `0` permits unlimited pixels |
-| `MaxDocumentPixels` | `1000000000` | Maximum pixels across the document; `0` permits unlimited pixels |
+| `MaxPageWidth` | `20000` | Hard limit on planned and rendered page width after target scaling; `0` permits unlimited width |
+| `MaxPageHeight` | `20000` | Hard limit on planned and rendered page height after target scaling; `0` permits unlimited height |
+| `MaxPagePixels` | `200000000` | Hard limit on planned and rendered pixels per page after target scaling; `0` permits unlimited pixels |
+| `TargetPagePixels` | `0` | Target pixels per page; larger pages are scaled down before bitmap creation, smaller pages are not enlarged, and `0` disables scaling |
+| `MaxDocumentPixels` | `1000000000` | Hard limit on the accumulated rendered pixels across the document; `0` permits unlimited pixels |
 | `MaxOOXMLMembers` | `10000` | Maximum OOXML ZIP members; `0` permits unlimited members |
 | `MaxOOXMLMemberBytes` | `268435456` | Maximum uncompressed bytes per member; `0` permits unlimited bytes |
 | `MaxOOXMLTotalBytes` | `1073741824` | Maximum total uncompressed bytes; `0` permits unlimited bytes |
@@ -149,6 +152,8 @@ func (ExtractOptions) Validate() error
 `ImageFormat` is a string type with the only valid values `ImageFormatPNG` (`"png"`) and `ImageFormatJPEG` (`"jpeg"`).
 
 JPEG has no alpha channel, so combining `ImageFormatJPEG` with `TransparentBackground=true` is invalid.
+
+`TargetPagePixels` is a scaling target, while `MaxPageWidth`, `MaxPageHeight`, and `MaxPagePixels` are rejection limits. The target is applied first and the hard limits are applied to the planned output. Pre-scaling dimensions derived from `DPI` may be larger than the corresponding hard-limit values; rendering is allowed only when the planned output after target scaling satisfies every enabled hard limit. `TargetPagePixels` and `MaxPagePixels` are independent; options validation does not require the target to be less than the hard limit, and rendering fails if the planned output still exceeds an enabled hard limit.
 
 | `ExtractOptions` field | Default | Constraint and meaning |
 |---|---:|---|
@@ -166,10 +171,13 @@ Modern OOXML extraction does not invoke LibreOffice, though options are validate
 
 ```go
 type RenderedImage struct {
-  PageNumber int
-  Path       string
-  Width      int
-  Height     int
+  PageNumber      int
+  Path            string
+  RequestedWidth  int
+  RequestedHeight int
+  Width           int
+  Height          int
+  Scaled          bool
 }
 
 type RenderResult struct {
@@ -194,7 +202,7 @@ func (ExtractResult) Part(number int) (TextPart, bool)
 func (ExtractResult) Text() string
 ```
 
-Image and text parts are ordered and numbered from one. `RenderResult.PageCount` returns `len(Images)`; `ExtractResult.Part` looks up a part by number; `Text` joins parts with one blank line.
+Image and text parts are ordered and numbered from one. `RequestedWidth` and `RequestedHeight` are the dimensions requested by `DPI` before target scaling; `Width` and `Height` are the saved image dimensions. `Scaled` is fixed from the page render plan and reports whether `TargetPagePixels` reduced either planned dimension. PDFium returning a smaller image within an unscaled plan does not set `Scaled`. `RenderResult.PageCount` returns `len(Images)`; `ExtractResult.Part` looks up a part by number; `Text` joins parts with one blank line.
 
 
 ### Cancellation, Concurrency, and Resource Management
@@ -245,11 +253,67 @@ PPTX normalization preserves line endpoints; when no shape changes, the original
 
 ## PDF Rendering
 
-PDF rendering uses `go-pdfium` on wazero, requiring neither CGO nor an external renderer. Each call owns a single-instance pool and holds the PDF in memory, bounded by `MaxPDFBytes`. Pages are rendered sequentially; page dimensions and pixel limits are checked before bitmap creation. Cancellation kills the active PDFium instance and waits for it to terminate.
+PDF rendering uses `go-pdfium` on wazero, requiring neither CGO nor an external renderer. Each call owns a single-instance pool and holds the PDF in memory, bounded by `MaxPDFBytes`. Pages are planned, rendered, and saved sequentially. Cancellation kills the active PDFium instance and waits for it to terminate.
 
-### Background handling
+### DPI and target relationship
 
-Default rendering composites onto white. Transparent output is PNG-only and uses an alpha bitmap. Images are written to a temporary destination file and renamed after a complete encode, so failed or canceled encodes do not publish a partial file.
+`DPI` determines the requested base resolution from the physical PDF page size. `TargetPagePixels` does not replace `DPI`; it caps the pixel count produced from that requested resolution. When the requested pixel count is within the target, the output dimensions remain those derived from `DPI`. When it exceeds the target, both dimensions are reduced by the same scale before rendering. Pages below the target are never enlarged.
+
+Requested width and height are approximately proportional to `DPI`, so the requested pixel count is approximately proportional to the square of `DPI`. Increasing `DPI` increases output dimensions until `TargetPagePixels` is reached; after that point, the target keeps the output pixel count capped. For a scaled page, the conceptual effective resolution is `DPI * scale`, but the renderer passes the calculated pixel dimensions directly to PDFium instead of rounding this value to an integer DPI.
+
+### Page render planning
+
+`GetPageSizeInPixels` calculates `RequestedWidth` and `RequestedHeight` from the physical PDF page and `DPI`. A pure calculation then produces one immutable plan for the page:
+
+```go
+type pageRenderPlan struct {
+  RequestedWidth  int
+  RequestedHeight int
+  OutputWidth     int
+  OutputHeight    int
+  OutputPixels    uint64
+  Scaled          bool
+}
+```
+
+When `TargetPagePixels` is `0`, or the requested pixel count is already within the target, the output dimensions equal the requested dimensions. The renderer never enlarges a page to approach the target. Otherwise it applies the same conceptual scale to both dimensions:
+
+```text
+pixelScale  = sqrt(TargetPagePixels / RequestedWidth / RequestedHeight)
+scale       = min(1, pixelScale)
+OutputWidth = max(1, floor(RequestedWidth * scale))
+OutputHeight = max(1, floor(RequestedHeight * scale))
+```
+
+The implementation divides before multiplying so an overflowing requested pixel product does not prevent deriving a safe target size. It also checks the integer result with `OutputWidth > TargetPagePixels / OutputHeight` rather than multiplying first. If floating-point error leaves the integer dimensions above the target, `OutputWidth` is clamped to the maximum width allowed by `OutputHeight`. Every enabled target can produce at least `1 x 1`; the calculation performs a fixed number of operations and does not search iteratively.
+
+### Limit ordering and document accounting
+
+The renderer applies dimensions and limits in this order:
+
+1. Calculate requested dimensions from `DPI`.
+2. Apply `TargetPagePixels` to obtain planned output dimensions.
+3. Apply `MaxPageWidth`, `MaxPageHeight`, and `MaxPagePixels` to the planned output.
+4. Before rendering, compare saved-page pixels plus the next page's planned pixels with `MaxDocumentPixels`.
+5. After a successful save, add the rendered image's actual pixels to the saved-page total.
+
+All pixel multiplication and accumulation checks are overflow-safe. The pre-render document check is conservative because rendered dimensions must not exceed the plan. Failed rendering or saving does not add that page to the accumulated total. These limits describe allocated and saved output dimensions; a separate option would be required if requested dimensions before target scaling also needed a hard limit.
+
+### PDFium rendering paths
+
+- An opaque page with `Scaled=false` uses `RenderPageInDPI` to preserve existing output behavior.
+- An opaque page with `Scaled=true` uses `RenderPageInPixels`, passing `OutputWidth` and `OutputHeight` as maximum dimensions.
+- A transparent page uses `FPDFBitmap_Create` and `FPDF_RenderPageBitmap` with `OutputWidth` and `OutputHeight`, so it never allocates the requested-size bitmap before scaling.
+
+Both opaque paths preserve form rendering. Opaque output is composited onto white; transparent output remains PNG-only and uses an alpha bitmap.
+
+### Rendered-size validation
+
+Before encoding, image bounds are the source of truth for saved `Width` and `Height`. The renderer requires both dimensions to be positive and no greater than the planned dimensions, then reapplies the enabled page hard limits and `TargetPagePixels` to the actual pixel count. A result outside the plan is an internal rendering mismatch rather than an input limit violation; it is not resized or retried and is returned through `DocumentRenderError`. The image is published only after this validation and a complete encode.
+
+### Image publication
+
+Images are written to a temporary destination file and renamed after a complete encode, so failed or canceled encodes do not publish a partial file.
 
 ## Output Contract
 
@@ -268,7 +332,7 @@ Page numbers are padded to at least four digits and expand for 10,000 or more pa
 - **Isolated LibreOffice profile**: each conversion uses a fresh temporary profile (`-env:UserInstallation`) with `--headless` and related flags; macro security is Very High (`MacroSecurityLevel=3`), so XLSM macros are not executed.
 - **Source documents are never modified**: OOXML preparation runs on temporary copies in the per-conversion workspace; the original file is only read.
 - **Temporary workspace permissions**: workspace and output directories are `0700`, the profile file is `0600`, and the workspace is removed after each conversion.
-- **Resource limits with overflow-safe arithmetic**: `MaxPDFBytes`, `MaxPages`, page dimension/pixel limits, `MaxOOXML*`, and `MaxCharacters` bound memory, rendering, and text. OOXML limits are enforced from ZIP metadata and while streaming members, mitigating zip-bomb-style archives.
+- **Resource limits with overflow-safe arithmetic**: `MaxPDFBytes`, `MaxPages`, `TargetPagePixels`, page dimension/pixel hard limits, `MaxDocumentPixels`, `MaxOOXML*`, and `MaxCharacters` bound memory, rendering, and text. Target scaling occurs before bitmap allocation and hard-limit evaluation. OOXML limits are enforced from ZIP metadata and while streaming members, mitigating zip-bomb-style archives.
 - **Cancellation and timeouts**: context cancellation terminates LibreOffice and interrupts PDFium; `RenderTimeout` and `LibreOfficeTimeout` bound operation duration.
 - **Atomic image publication**: images are encoded to a temporary file and renamed only after a complete encode, so failed or canceled encodes never publish a partial image.
 - **Filename prefix validation**: `FilenamePrefix` must be a single path component, preventing path traversal through generated output names.
@@ -282,7 +346,7 @@ Page numbers are padded to at least four digits and expand for 10,000 or more pa
 
 ## CLI Design
 
-`cmd/document-image-renderer` creates a context that handles operating-system signals and delegates to `internal/cli.Run`. The CLI exposes the library options as flags and accepts `SOURCE OUTPUT_DIRECTORY` as positional arguments. `--render-timeout` limits the complete render operation, while `--timeout` retains its existing meaning as the limit for each LibreOffice conversion; both default to 120 seconds.
+`cmd/document-image-renderer` creates a context that handles operating-system signals and delegates to `internal/cli.Run`. The CLI exposes the library options as flags and accepts `SOURCE OUTPUT_DIRECTORY` as positional arguments. `--target-page-pixels` scales larger pages before rendering and defaults to `0`, which disables scaling. `--render-timeout` limits the complete render operation, while `--timeout` retains its existing meaning as the limit for each LibreOffice conversion; both default to 120 seconds.
 
 On success, each generated image path is followed by the path of its UTF-8 text file. A text file uses the same stem as its image, replacing the image extension with `.txt`. The CLI matches `RenderedImage.PageNumber` to `TextPart.PartNumber`; when no corresponding part exists, it writes an empty text file. This occurs for additional DOC or DOCX pages because those formats expose one document-body text part rather than rendered page boundaries. Paths are emitted only after rendering, extraction, and all text writes succeed. Diagnostics and usage information are written to standard error. Exit codes have the following meanings:
 

@@ -29,7 +29,10 @@ cmd/document-image-renderer/main.go   Process startup, signal handling, exit cod
 internal/cli/cli.go                   Flag parsing, standard I/O, exit codes (0/1/2)
 pkg/renderer/
   doc.go                              Public package documentation
-  models.go                           Options and result models
+  render_options.go                  Rendering options and defaults
+  extract_options.go                 Extraction options and defaults
+  render_result.go                   Render result models
+  extract_result.go                  Extraction result models
   errors.go                           Public error types
   renderer.go                         Shared validation and rendering pipeline control
   extract.go                          Extraction API and format routing

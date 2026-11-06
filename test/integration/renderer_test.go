@@ -47,6 +47,21 @@ func TestRenderFixtureDocuments(t *testing.T) {
 			for _, rendered := range result.Images {
 				assertImage(t, rendered)
 			}
+			scaledOptions := renderer.DefaultRenderOptions()
+			scaledOptions.TargetPagePixels = 50_000
+			scaled, err := renderer.RenderDocument(context.Background(), source, t.TempDir(), &scaledOptions)
+			if err != nil {
+				t.Fatalf("render scaled document: %v", err)
+			}
+			if scaled.PageCount() != result.PageCount() {
+				t.Fatalf("scaled pages = %d, original pages = %d", scaled.PageCount(), result.PageCount())
+			}
+			for _, rendered := range scaled.Images {
+				assertImage(t, rendered)
+				if !rendered.Scaled || uint64(rendered.Width)*uint64(rendered.Height) > scaledOptions.TargetPagePixels {
+					t.Fatalf("image was not scaled to target: %+v", rendered)
+				}
+			}
 			extracted, err := renderer.ExtractDocument(context.Background(), source)
 			if err != nil {
 				t.Fatalf("extract document: %v", err)

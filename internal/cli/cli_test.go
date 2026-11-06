@@ -3,6 +3,8 @@ package cli
 import (
 	"bytes"
 	"context"
+	"image"
+	_ "image/png"
 	"os"
 	"path/filepath"
 	"strings"
@@ -47,6 +49,39 @@ func TestRunRendersPDF(t *testing.T) {
 		if len(content) == 0 {
 			t.Fatalf("extracted text is empty: %s", textPath)
 		}
+	}
+}
+
+func TestRunScalesToTargetPagePixels(t *testing.T) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	outputDirectory := t.TempDir()
+	source := filepath.Join("..", "..", "test", "documents", "samplefile.pdf")
+
+	exitCode := Run(
+		context.Background(),
+		[]string{"--dpi", "72", "--target-page-pixels", "50000", source, outputDirectory},
+		&stdout,
+		&stderr,
+	)
+	if exitCode != 0 {
+		t.Fatalf("unexpected exit code %d: %s", exitCode, stderr.String())
+	}
+	paths := strings.Fields(stdout.String())
+	if len(paths) < 2 {
+		t.Fatalf("missing output paths: %v", paths)
+	}
+	input, err := os.Open(paths[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer input.Close()
+	config, _, err := image.DecodeConfig(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if uint64(config.Width)*uint64(config.Height) > 50_000 {
+		t.Fatalf("rendered dimensions exceed target: %dx%d", config.Width, config.Height)
 	}
 }
 

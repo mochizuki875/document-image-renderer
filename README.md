@@ -173,6 +173,7 @@ Example:
 ```bash
 document-image-renderer \
   --dpi 300 \
+	--target-page-pixels 80000000 \
   --format png \
   test/documents/samplefile.docx \
   example/output
@@ -221,6 +222,7 @@ func main() {
 	outputDirectory := "example/output"
 	options := renderer.DefaultRenderOptions()
 	options.DPI = 300
+	options.TargetPagePixels = 80_000_000
 	options.ImageFormat = renderer.ImageFormatPNG
 
 	result, err := renderer.RenderDocument(

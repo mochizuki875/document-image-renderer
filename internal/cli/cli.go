@@ -27,6 +27,7 @@ func Run(ctx context.Context, arguments []string, stdout, stderr io.Writer) int 
 	maxPageWidth := flags.Int("max-page-width", defaults.MaxPageWidth, "maximum rendered page width (0 for unlimited)")
 	maxPageHeight := flags.Int("max-page-height", defaults.MaxPageHeight, "maximum rendered page height (0 for unlimited)")
 	maxPagePixels := flags.Uint64("max-page-pixels", defaults.MaxPagePixels, "maximum pixels per page (0 for unlimited)")
+	targetPagePixels := flags.Uint64("target-page-pixels", defaults.TargetPagePixels, "target pixels per page (0 to disable scaling)")
 	maxDocumentPixels := flags.Uint64("max-document-pixels", defaults.MaxDocumentPixels, "maximum pixels across all pages (0 for unlimited)")
 	extractDefaults := renderer.DefaultExtractOptions()
 	maxCharacters := flags.Int("max-characters", extractDefaults.MaxCharacters, "maximum characters to extract (0 for unlimited)")
@@ -63,6 +64,7 @@ func Run(ctx context.Context, arguments []string, stdout, stderr io.Writer) int 
 	options.MaxPageWidth = *maxPageWidth
 	options.MaxPageHeight = *maxPageHeight
 	options.MaxPagePixels = *maxPagePixels
+	options.TargetPagePixels = *targetPagePixels
 	options.MaxDocumentPixels = *maxDocumentPixels
 	options.MaxOOXMLMembers = *maxOOXMLMembers
 	options.MaxOOXMLMemberBytes = *maxOOXMLMemberBytes

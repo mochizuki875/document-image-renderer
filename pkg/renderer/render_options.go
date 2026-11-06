@@ -3,7 +3,6 @@ package renderer
 import (
 	"fmt"
 	"path/filepath"
-	"strings"
 	"time"
 )
 
@@ -25,6 +24,7 @@ type RenderOptions struct {
 	MaxPageWidth          int
 	MaxPageHeight         int
 	MaxPagePixels         uint64
+	TargetPagePixels      uint64
 	MaxDocumentPixels     uint64
 	MaxOOXMLMembers       int
 	MaxOOXMLMemberBytes   uint64
@@ -35,44 +35,6 @@ type RenderOptions struct {
 	FilenamePrefix        string
 	LibreOfficeTimeout    time.Duration
 	LibreOfficeExecutable string
-}
-
-// ExtractOptions controls extraction limits and dependencies.
-// The zero value is not usable; call DefaultExtractOptions and override fields.
-type ExtractOptions struct {
-	MaxCharacters         int
-	MaxPDFBytes           uint64
-	MaxOOXMLMembers       int
-	MaxOOXMLMemberBytes   uint64
-	MaxOOXMLTotalBytes    uint64
-	LibreOfficeTimeout    time.Duration
-	LibreOfficeExecutable string
-}
-
-// DefaultExtractOptions returns the default extraction configuration.
-// MaxCharacters is zero, meaning no character limit.
-func DefaultExtractOptions() ExtractOptions {
-	return ExtractOptions{
-		MaxPDFBytes:         128 << 20,
-		MaxOOXMLMembers:     10_000,
-		MaxOOXMLMemberBytes: 256 << 20,
-		MaxOOXMLTotalBytes:  1 << 30,
-		LibreOfficeTimeout:  120 * time.Second,
-	}
-}
-
-// Validate checks whether all extraction option values are valid.
-func (options ExtractOptions) Validate() error {
-	if options.MaxCharacters < 0 {
-		return fmt.Errorf("max characters must not be negative")
-	}
-	if options.MaxOOXMLMembers < 0 {
-		return fmt.Errorf("max OOXML members must not be negative")
-	}
-	if options.LibreOfficeTimeout < 0 {
-		return fmt.Errorf("libreoffice timeout must not be negative")
-	}
-	return nil
 }
 
 // DefaultRenderOptions returns the default rendering configuration.
@@ -128,62 +90,4 @@ func (options RenderOptions) Validate() error {
 		return fmt.Errorf("filename prefix must be a file name component")
 	}
 	return nil
-}
-
-// RenderedImage describes one rendered document page.
-// PageNumber is one-based and follows the document page order.
-type RenderedImage struct {
-	PageNumber int
-	Path       string
-	Width      int
-	Height     int
-}
-
-// RenderResult contains all images generated from a document.
-type RenderResult struct {
-	Source string
-	Images []RenderedImage
-}
-
-// PageCount returns the number of rendered pages.
-func (result RenderResult) PageCount() int {
-	return len(result.Images)
-}
-
-// TextPart contains text extracted from one document unit. A unit is a page
-// for PDFs, a slide for presentations, or a worksheet for workbooks.
-type TextPart struct {
-	PartNumber int
-	Text       string
-}
-
-// ExtractResult contains text extracted from a document in source order.
-type ExtractResult struct {
-	Source string
-	Parts  []TextPart
-}
-
-// PartCount returns the number of extracted document units.
-func (result ExtractResult) PartCount() int {
-	return len(result.Parts)
-}
-
-// Part returns the extracted text part with the requested one-based number.
-// The bool is false when no part has that number.
-func (result ExtractResult) Part(number int) (TextPart, bool) {
-	for _, part := range result.Parts {
-		if part.PartNumber == number {
-			return part, true
-		}
-	}
-	return TextPart{}, false
-}
-
-// Text joins extracted parts with a blank line.
-func (result ExtractResult) Text() string {
-	texts := make([]string, 0, len(result.Parts))
-	for _, part := range result.Parts {
-		texts = append(texts, part.Text)
-	}
-	return strings.Join(texts, "\n\n")
 }

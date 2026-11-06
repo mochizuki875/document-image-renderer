@@ -45,6 +45,43 @@ func TestRenderDocumentRendersEveryPDFPage(t *testing.T) {
 	}
 }
 
+func TestRenderDocumentScalesPagesToTargetPixels(t *testing.T) {
+	for _, transparent := range []bool{false, true} {
+		name := "opaque"
+		if transparent {
+			name = "transparent"
+		}
+		t.Run(name, func(t *testing.T) {
+			options := DefaultRenderOptions()
+			options.DPI = 72
+			options.TargetPagePixels = 50_000
+			options.TransparentBackground = transparent
+
+			result, err := RenderDocument(
+				context.Background(),
+				fixturePath("samplefile.pdf"),
+				t.TempDir(),
+				&options,
+			)
+			if err != nil {
+				t.Fatalf("render scaled PDF: %v", err)
+			}
+			for _, rendered := range result.Images {
+				if !rendered.Scaled {
+					t.Fatalf("expected scaled metadata: %+v", rendered)
+				}
+				if rendered.RequestedWidth <= rendered.Width || rendered.RequestedHeight <= rendered.Height {
+					t.Fatalf("expected output smaller than requested dimensions: %+v", rendered)
+				}
+				if uint64(rendered.Width)*uint64(rendered.Height) > options.TargetPagePixels {
+					t.Fatalf("rendered pixels exceed target: %+v", rendered)
+				}
+				assertDecodableImage(t, rendered)
+			}
+		})
+	}
+}
+
 func TestPageCountCountsPDFWithoutRendering(t *testing.T) {
 	pageCount, err := PageCount(context.Background(), fixturePath("samplefile.pdf"))
 	if err != nil {
