@@ -130,6 +130,8 @@ Verify the installation:
 
 </details>
 
+On Unix systems, each LibreOffice conversion runs in its own process group. Cancellation or timeout terminates that group so one conversion does not leave its LibreOffice descendants running or affect another conversion. If a descendant keeps an output pipe open after the direct process exits, an internal two-second wait limit closes the pipe and returns an error. Descendants that explicitly leave the process group are outside this guarantee.
+
 ## Installation
 
 ### Command-line tool

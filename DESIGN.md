@@ -207,7 +207,7 @@ Image and text parts are ordered and numbered from one. `RequestedWidth` and `Re
 
 ### Cancellation, Concurrency, and Resource Management
 
-`RenderTimeout` limits the complete render operation; an earlier caller deadline wins. Calls own independent LibreOffice profiles and PDFium pools, and may run concurrently unless they write the same output name. PDFs and live page bitmaps are held in memory; services processing untrusted input should also enforce process-level CPU, memory, input-size, storage, and concurrency limits.
+`RenderTimeout` limits the complete render operation; an earlier caller deadline wins. On Unix systems, each LibreOffice conversion owns a process group. Context cancellation sends `SIGKILL` to that group. If a descendant keeps an output pipe open after the direct process exits, `exec.Cmd.WaitDelay` closes the pipe after two seconds, and the resulting `exec.ErrWaitDelay` causes the same process group to be terminated. Process groups isolate concurrent conversions; descendants that explicitly leave their group are outside this guarantee. Calls also own independent LibreOffice profiles and PDFium pools, and may run concurrently unless they write the same output name. PDFs and live page bitmaps are held in memory; services processing untrusted input should also enforce process-level CPU, memory, input-size, storage, and concurrency limits.
 
 DOCX and PPTX extraction preserves paragraph boundaries, explicit breaks, and tabs. PPTX slide order follows presentation relationships; hidden slides are included and orphan slide parts are ignored.
 
@@ -237,7 +237,7 @@ Invalid options, a `nil` context, invalid input paths, and output-directory crea
 
 ### Workspace and invocation
 
-`LibreOfficeExecutable` is used directly when set; otherwise the library searches `PATH` for `libreoffice`, then `soffice`. Each conversion owns a temporary workspace, isolated LibreOffice profile, and prepared OOXML copy when needed. LibreOffice runs without a shell with macro security set to Very High, and the source is never modified. Conversion fails unless the expected regular output exists; standard output and standard error are retained for diagnostics.
+`LibreOfficeExecutable` is used directly when set; otherwise the library searches `PATH` for `libreoffice`, then `soffice`. Each conversion owns a temporary workspace, isolated LibreOffice profile, and prepared OOXML copy when needed. LibreOffice runs without a shell with macro security set to Very High, and the source is never modified. On Unix systems, `Setpgid` creates a conversion-specific process group and `Cmd.Cancel` terminates that group. Conversion fails unless the expected regular output exists; standard output and standard error are retained for diagnostics.
 
 ### Format-specific preparation
 
@@ -333,7 +333,7 @@ Page numbers are padded to at least four digits and expand for 10,000 or more pa
 - **Source documents are never modified**: OOXML preparation runs on temporary copies in the per-conversion workspace; the original file is only read.
 - **Temporary workspace permissions**: workspace and output directories are `0700`, the profile file is `0600`, and the workspace is removed after each conversion.
 - **Resource limits with overflow-safe arithmetic**: `MaxPDFBytes`, `MaxPages`, `TargetPagePixels`, page dimension/pixel hard limits, `MaxDocumentPixels`, `MaxOOXML*`, and `MaxCharacters` bound memory, rendering, and text. Target scaling occurs before bitmap allocation and hard-limit evaluation. OOXML limits are enforced from ZIP metadata and while streaming members, mitigating zip-bomb-style archives.
-- **Cancellation and timeouts**: context cancellation terminates LibreOffice and interrupts PDFium; `RenderTimeout` and `LibreOfficeTimeout` bound operation duration.
+- **Cancellation and timeouts**: on Unix systems, context cancellation terminates the conversion-specific LibreOffice process group, and a two-second `WaitDelay` bounds inherited output-pipe waiting; cancellation also interrupts PDFium. `RenderTimeout` and `LibreOfficeTimeout` bound operation duration.
 - **Atomic image publication**: images are encoded to a temporary file and renamed only after a complete encode, so failed or canceled encodes never publish a partial image.
 - **Filename prefix validation**: `FilenamePrefix` must be a single path component, preventing path traversal through generated output names.
 - **The library is not a sandbox**: PDFium (WASM) and LibreOffice run on the host. Malicious documents can exploit vulnerabilities in PDFium, wazero, LibreOffice, or the OOXML libraries; keep dependencies current and run in an isolated host environment.

@@ -17,6 +17,8 @@ import (
 // single page, which keeps the rendered page count of a workbook predictable.
 const calcSinglePageFilter = `pdf:calc_pdf_Export:{"SinglePageSheets":{"type":"boolean","value":"true"}}`
 
+const libreOfficeWaitDelay = 2 * time.Second
+
 // libreOfficeProfile disables macro security prompts in the temporary user
 // profile so headless conversion never blocks on a dialog.
 const libreOfficeProfile = `<?xml version="1.0" encoding="UTF-8"?>
@@ -31,11 +33,16 @@ var findExecutable = exec.LookPath
 
 var executeLibreOffice = func(ctx context.Context, executable string, arguments []string) (string, string, error) {
 	command := exec.CommandContext(ctx, executable, arguments...)
+	configureLibreOfficeProcessGroup(command)
+	command.WaitDelay = libreOfficeWaitDelay
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 	command.Stdout = &stdout
 	command.Stderr = &stderr
 	err := command.Run()
+	if errors.Is(err, exec.ErrWaitDelay) {
+		err = errors.Join(err, terminateLibreOfficeProcessGroup(command))
+	}
 	return stdout.String(), stderr.String(), err
 }
 
@@ -180,10 +187,14 @@ func convertOffice(
 	}
 	defer cancel()
 	stdout, stderr, commandErr := executeLibreOffice(commandContext, executable, arguments)
-	if timeoutErr := commandContext.Err(); errors.Is(timeoutErr, context.DeadlineExceeded) {
-		return fail(fmt.Errorf("LibreOffice timed out: %w", timeoutErr), stdout, stderr)
-	}
 	if commandErr != nil {
+		contextErr := commandContext.Err()
+		if errors.Is(contextErr, context.DeadlineExceeded) {
+			return fail(fmt.Errorf("LibreOffice timed out: %w", contextErr), stdout, stderr)
+		}
+		if contextErr != nil {
+			return fail(contextErr, stdout, stderr)
+		}
 		return fail(commandErr, stdout, stderr)
 	}
 

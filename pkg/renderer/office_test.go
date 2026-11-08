@@ -165,6 +165,41 @@ func TestConvertOfficeReportsLibreOfficeTimeout(t *testing.T) {
 	}
 }
 
+func TestConvertOfficeReportsCallerCancellation(t *testing.T) {
+	source := filepath.Join(t.TempDir(), "input.ppt")
+	if err := os.WriteFile(source, []byte("placeholder"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	replaceLibreOfficeFunctions(t)
+	findExecutable = func(string) (string, error) { return "libreoffice", nil }
+	started := make(chan struct{})
+	executeLibreOffice = func(ctx context.Context, _ string, _ []string) (string, string, error) {
+		close(started)
+		<-ctx.Done()
+		return "output", "canceled", errors.New("signal: killed")
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	result := make(chan error, 1)
+	go func() {
+		_, err := RenderDocument(ctx, source, t.TempDir(), nil)
+		result <- err
+	}()
+	<-started
+	cancel()
+	err := <-result
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context.Canceled, got %v", err)
+	}
+	var conversionError *DocumentConversionError
+	if !errors.As(err, &conversionError) {
+		t.Fatalf("expected DocumentConversionError, got %v", err)
+	}
+	if conversionError.Stdout != "output" || conversionError.Stderr != "canceled" {
+		t.Fatalf("diagnostics were not retained: %+v", conversionError)
+	}
+}
+
 func TestConvertOfficeReportsMissingOutput(t *testing.T) {
 	source := filepath.Join(t.TempDir(), "input.ppt")
 	if err := os.WriteFile(source, []byte("placeholder"), 0o600); err != nil {
