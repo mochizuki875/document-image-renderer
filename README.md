@@ -20,7 +20,7 @@ Legacy DOC, PPT, and XLS files are converted to temporary OOXML files before tex
 
 ## Requirements
 
-- Go 1.27 or later
+- Go 1.27.3 or later
 - LibreOffice for Office rendering and legacy DOC, PPT, or XLS extraction
 - Fonts used by the source documents for stable Office layout
 
@@ -277,6 +277,6 @@ make build
 
 Integration tests discover every file directly under `test/documents`. They require `RUN_INTEGRATION_TESTS=1`; Office cases are skipped when LibreOffice is unavailable.
 
-The dev container supplies Go 1.27, LibreOffice Writer/Calc/Impress, and fonts used by common Office documents.
+The dev container supplies Go 1.27.3, LibreOffice Writer/Calc/Impress, and fonts used by common Office documents.
 
 See [DESIGN.md](DESIGN.md) for architecture, conversion behavior, and operational limits.
